@@ -1,0 +1,19 @@
+# ※ 이 파일은 GitHub 에도 올라가 웹사이트(Streamlit Cloud)에서도 쓰입니다.
+#    port 같은 「내 PC 전용」 설정을 넣으면 웹사이트가 실행되지 않으니 넣지 마세요.
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+# 함수 밖 한 줄의 결과가 화면에 「None」 으로 찍히는 것을 막습니다 — 지우지 마세요
+[runner]
+magicEnabled = false
+
+[theme]
+base = "light"
+primaryColor = "#E2611C"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#0B0B0B"
+font = "sans serif"
