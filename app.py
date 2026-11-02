@@ -6442,7 +6442,7 @@ def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
 # 2. 사이드바
 # ══════════════════════════════════════════════════════════════
 if 'menu' not in st.session_state:
-    st.session_state['menu'] = '미국 커넥트'
+    st.session_state['menu'] = 'CTKonnect'
 
 st.sidebar.markdown("""
 <div class="brand-box">
@@ -6457,7 +6457,7 @@ st.sidebar.markdown("""
 메뉴목록 = ['실적보고', '미수채권 관리', '계정과목 상세', '데이터 점검',
             '연결재무제표 패키지', '실적보고 엑셀작성', '월간실적']
 # 「실적보고」를 누르면 아래 세 화면이 펼쳐집니다 (맨 처음은 누적 실적보고)
-실적하위 = ['미국 커넥트', '한국 커넥트']   # 2026-10-29 커넥트는 미국 · 한국 두 법인        # 당월·월별 실적보고는 누적 화면의 손익계산서(연도·판관비 구분 선택)로 합침 (2026-10-27)
+실적하위 = ['CTKonnect', '한국 커넥트']   # 2026-10-29 커넥트는 미국 · 한국 두 법인        # 당월·월별 실적보고는 누적 화면의 손익계산서(연도·판관비 구분 선택)로 합침 (2026-10-27)
 # 「연결재무제표 패키지」도 같은 방식으로 네 화면을 거느립니다
 패키지하위 = ['재무제표', '주석사항']
 # 재무제표 화면 안에서 고르는 세 가지 (자동 번역을 막으려고 영문 약칭을 앞에 답니다)
@@ -7815,8 +7815,8 @@ if 메뉴 == '한국 커넥트':
   <div class="card" style="max-width:820px; margin-top:8px">
     <div style="font-size:15px; line-height:1.85; color:{T['ink2']}">
       한국 커넥트(씨티케이커넥트) 실적 화면은 아직 만들지 않았습니다.<br>
-      지금은 <b style="color:{T['ink']}">미국 커넥트</b>(CTKonnect, Inc.) 실적만 보여 드립니다 —
-      왼쪽 「실적보고 → 미국 커넥트」를 눌러 주세요.</div></div></div>""")
+      지금은 <b style="color:{T['ink']}">CTKonnect</b>(미국 법인 CTKonnect, Inc.) 실적만 보여 드립니다 —
+      왼쪽 「실적보고 → CTKonnect」를 눌러 주세요.</div></div></div>""")
     st.stop()
 
 try:
@@ -7827,7 +7827,7 @@ except Exception as e:
     st.stop()
 
 전년연도 = 당해연도 - 1
-전년없음 = False      # 2026-10-29 : 25년에도 거래가 있어 25년 칸 · 선을 다시 보입니다 (25년 원장_raw 를 넣으면 숫자가 채워짐)
+전년없음 = len(전년원장) == 0      # 2026-11-02 : 전년 원장이 없으면 전년 칸 · 연도 고르기를 숨김 (26년은 25년 없이, 27년부터 전년 비교)
 P = 손익표(당해원장, '활동')          # 대시보드·월간실적은 활동분류 기준을 씁니다
 P전 = 손익표(전년원장, '활동')
 P손익 = 손익표(당해원장, '손익')      # 실적집계 화면에서 고를 수 있는 손익계산서 기준
@@ -7904,7 +7904,7 @@ SRED = SRED월별(당해원장)
 # CTKonnect 장부 통화는 USD 하나 — 표시 통화 · 환율 칸이 없습니다 (캐나다는 CAD/USD 선택)
 통화 = 'USD'
 환율 = 1.0
-if 메뉴 in ('월간실적', '미국 커넥트') and not 입력값['단일'] and not 입력값['서술']:
+if 메뉴 in ('월간실적', 'CTKonnect') and not 입력값['단일'] and not 입력값['서술']:
     설정칸.caption('ℹ️ 연결패키지에 「월간보고_입력」 시트가 없어 목표·진척률·코멘트는 비어 있습니다.')
 배율 = 1.0
 표시나눔 = 1          # CTKonnect : 금액을 천 단위(K)가 아니라 USD 그대로 보여 줍니다 (2026-10-29)
@@ -8137,7 +8137,7 @@ def 엑셀열쇠():
             round(float(당해원장['금액'].abs().sum()), 2), round(float(기초현금), 2))
 
 
-if 메뉴 == '미국 커넥트':
+if 메뉴 == 'CTKonnect':
     제목칸, 내려받기칸 = st.columns([4, 1], gap='small')
     with 내려받기칸:
         if st.session_state.get('엑셀만들기'):
@@ -8158,7 +8158,7 @@ if 메뉴 == '미국 커넥트':
                       help='누르면 손익·현금흐름·미수채권과 처리본 원장을 담은 엑셀을 만듭니다')
     with 제목칸:
         st.html(f"""<div class="wrap" translate="no" style="margin-bottom:0">
-      <div class="page-head"><span class="t">실적보고 — 미국 커넥트</span>
+      <div class="page-head"><span class="t">실적보고 — CTKonnect</span>
         <span class="pill">{당해연도}년 1~{보고월}월 누적</span></div>
     </div>""")
 
@@ -8171,7 +8171,7 @@ if 메뉴 == '미국 커넥트':
     KPI원가 = (bool(_수불.get('직접재료비'))
                and st.session_state.get('dash_pl_basis', 원가기준라벨) == 원가기준라벨
                and not str(st.session_state.get('dash_pl_kind', '')).startswith('활동')
-               and not str(st.session_state.get('dash_pl_year', '')).startswith(str(전년연도)))
+               and (전년없음 or not str(st.session_state.get('dash_pl_year', '')).startswith(str(전년연도))))
     if KPI원가:
         _m0 = list(range(1, 보고월 + 1))
         _IS0 = 당해원장[당해원장['계정분류'].eq('IS')]
@@ -8346,7 +8346,7 @@ if 메뉴 == '미국 커넥트':
 
     # ══ 손익계산서 표 ══════════════════════════════════════
     #    카드 위 라디오 : 연도(당해/전년) · 판관비 구분(손익계산서 비용/활동성 비용) · 손익 기준(퀵북/원가)
-    당해보기 = not str(st.session_state.get('dash_pl_year', '')).startswith(str(전년연도))
+    당해보기 = 전년없음 or not str(st.session_state.get('dash_pl_year', '')).startswith(str(전년연도))
     활동기준 = str(st.session_state.get('dash_pl_kind', '')).startswith('활동')
     원장X = 당해원장 if 당해보기 else 전년원장
     PX = P if 당해보기 else P전                      # 활동분류 기준 표 (합계 줄은 손익 기준과 같음)
