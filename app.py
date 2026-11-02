@@ -4548,7 +4548,10 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
         x['종류'] = 종류
         전체.append(x)
     전체 = pd.concat(전체) if 전체 else g.iloc[0:0].assign(이름=None, 종류=None)
-    팩토링이름 = sorted({n for n in 전체['이름'] if _팩토링(n)})
+    def _순서(n):
+        u = 커_이름정리(n).upper()
+        return next((i for i, k in enumerate(커_팩토링거래처) if k.upper() in u), 99), n
+    팩토링이름 = sorted({n for n in 전체['이름'] if _팩토링(n)}, key=_순서)   # 팩토링 거래처 목록에 적은 순서대로
     원장1 = []          # 팩토링 거래처 : [(거래처, 종류, 줄들, 결산후줄들)]
     for 이름 in 팩토링이름:
         for 종류 in ('매출채권', '선수금'):
@@ -4723,6 +4726,9 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
                 if not 비:
                     건 = 건번호.get((키[0], round(max(float(y['차']), float(y['대'])), 0)))
                     비 = ' · '.join(x for x in (건, f'TID {_커_번호(y["TID"])}') if x)
+                    for k in 커_팩토링거래처:       # 적요는 다른 팩토링 거래처인데 퀵북 거래처가 이 거래처인 줄
+                        if k.upper() in str(y['적요']).upper() and k.upper() not in n.upper():
+                            비 += f' · 적요는 {k} 인데 퀵북 거래처가 {n} — 확인 필요'
                 r = 새[0]
                 잔식 = (f'=F{r}-G{r}' if r == 첫 else f'=I{r - 1}+F{r}-G{r}') if 종류 == '매출채권' else \
                        (f'=G{r}-F{r}' if r == 첫 else f'=I{r - 1}+G{r}-F{r}')
@@ -6457,7 +6463,7 @@ st.sidebar.markdown("""
 메뉴목록 = ['실적보고', '미수채권 관리', '계정과목 상세', '데이터 점검',
             '연결재무제표 패키지', '실적보고 엑셀작성', '월간실적']
 # 「실적보고」를 누르면 아래 세 화면이 펼쳐집니다 (맨 처음은 누적 실적보고)
-실적하위 = ['CTKonnect', '한국 커넥트']   # 2026-10-29 커넥트는 미국 · 한국 두 법인        # 당월·월별 실적보고는 누적 화면의 손익계산서(연도·판관비 구분 선택)로 합침 (2026-10-27)
+실적하위 = ['CTKonnect', '씨티케이커넥트', '연결 손익계산서']   # 2026-10-29 커넥트는 미국 · 한국 두 법인        # 당월·월별 실적보고는 누적 화면의 손익계산서(연도·판관비 구분 선택)로 합침 (2026-10-27)
 # 「연결재무제표 패키지」도 같은 방식으로 네 화면을 거느립니다
 패키지하위 = ['재무제표', '주석사항']
 # 재무제표 화면 안에서 고르는 세 가지 (자동 번역을 막으려고 영문 약칭을 앞에 답니다)
@@ -7809,14 +7815,239 @@ else:
 </div>""")
     st.stop()
 
-if 메뉴 == '한국 커넥트':
+if 메뉴 == '씨티케이커넥트':
     st.html(f"""<div class="wrap" translate="no">
-  <div class="page-head"><span class="t">실적보고 — 한국 커넥트</span><span class="pill">준비 중</span></div>
+  <div class="page-head"><span class="t">실적보고 — 씨티케이커넥트</span><span class="pill">준비 중</span></div>
   <div class="card" style="max-width:820px; margin-top:8px">
     <div style="font-size:15px; line-height:1.85; color:{T['ink2']}">
-      한국 커넥트(씨티케이커넥트) 실적 화면은 아직 만들지 않았습니다.<br>
+      씨티케이커넥트(한국 법인) 실적 화면은 아직 만들지 않았습니다.<br>
       지금은 <b style="color:{T['ink']}">CTKonnect</b>(미국 법인 CTKonnect, Inc.) 실적만 보여 드립니다 —
       왼쪽 「실적보고 → CTKonnect」를 눌러 주세요.</div></div></div>""")
+    st.stop()
+
+# ══════════════════════════════════════════════════════════════
+# 실적보고 → 연결 손익계산서 (2026-11-02)
+#   ① CTKonnect(미국 · USD) → ② 씨티케이커넥트(한국 · KRW) → ③ 연결 (단순합산 · 내부거래 제거 · 연결)
+#   두 법인 모두 연결패키지(26년 원장_raw · BS_IS_매핑) 양식에서 읽습니다.
+# ══════════════════════════════════════════════════════════════
+if 메뉴 == '연결 손익계산서':
+    KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'
+    미국이름 = ['CTKONNECT, INC', 'CTKONNECT INC', 'CTKONNECT,INC']           # 한국 원장에서 미국 법인을 찾을 글자
+    한국이름 = ['컴플리톤', '씨티케이커넥트', 'CTKCONNECT KOREA']             # 미국 원장에서 한국 법인을 찾을 글자 (구 이름 컴플리톤 포함)
+
+    def _kr자료실():
+        후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+                if '씨티케이커넥트' in os.path.basename(f) and '연결패키지' in os.path.basename(f)
+                and not os.path.basename(f).startswith('~$')]
+        return max(후보, key=os.path.getmtime) if 후보 else None
+
+    st.html(f"""<div class="wrap" translate="no">
+  <div class="page-head"><span class="t">실적보고 — 연결 손익계산서</span><span class="pill">CTKonnect + 씨티케이커넥트</span></div>
+  <div class="sub" style="margin:2px 0 6px">① CTKonnect → ② 씨티케이커넥트 → ③ 연결 순서로 봅니다 ·
+    연결 = 두 법인 단순합산 − 두 법인 사이 거래(내부거래) 제거</div></div>""")
+
+    with st.expander('씨티케이커넥트 연결패키지 올리기', expanded=False):
+        _kr = st.file_uploader('씨티케이커넥트(한국 법인) 연결패키지 — 「26년 원장_raw」 · 「BS_IS_매핑」 시트가 든 엑셀',
+                               type=['xlsx'], key='kr_pkg')
+        if _kr is not None:
+            try:
+                with open(KR보관, 'wb') as _f:
+                    _f.write(_kr.getvalue())
+                with open(KR이름표, 'w', encoding='utf-8') as _f:
+                    _f.write(_kr.name)
+            except OSError:
+                pass
+        st.caption('PC 에서는 자료실에 「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」 를 넣어 두면 자동으로 읽습니다.')
+
+    KR바이트, KR파일 = None, ''
+    if st.session_state.get('kr_pkg') is not None:
+        KR바이트, KR파일 = st.session_state['kr_pkg'].getvalue(), st.session_state['kr_pkg'].name
+    else:
+        _p = _kr자료실()
+        if _p and (not os.path.exists(KR보관) or os.path.getmtime(_p) > os.path.getmtime(KR보관) + 1):
+            with open(_p, 'rb') as _f:
+                KR바이트, KR파일 = _f.read(), os.path.basename(_p)
+        elif os.path.exists(KR보관):
+            with open(KR보관, 'rb') as _f:
+                KR바이트 = _f.read()
+            try:
+                KR파일 = open(KR이름표, encoding='utf-8').read().strip()
+            except OSError:
+                KR파일 = KR보관
+
+    def _읽기(바이트):
+        r = 원장읽기(바이트)
+        return r[0], r[2]
+    try:
+        US원장, US연도 = _읽기(데이터바이트)
+    except Exception as e:
+        st.error(f'CTKonnect 연결패키지를 읽지 못했습니다 — {e}')
+        st.stop()
+    KR원장, KR오류 = None, ''
+    if KR바이트:
+        try:
+            KR원장, _ = _읽기(KR바이트)
+        except Exception as e:
+            KR오류 = str(e)
+
+    # 평균환율 (원/USD) — CTKonnect 연결패키지 IS M5
+    try:
+        _w = openpyxl.load_workbook(io.BytesIO(데이터바이트), read_only=True, data_only=False)
+        _기본환율 = float(_w['IS']['M5'].value)
+    except Exception:
+        _기본환율 = 0.0
+    c1, c2, c3 = st.columns([1.2, 1, 2.4], gap='small')
+    통화선택 = c1.radio('보여 줄 통화', ['원화 (KRW)', '달러 (USD)'], horizontal=True, key='conso_ccy')
+    환율 = c2.number_input('평균환율 (원/USD)', min_value=0.0, value=round(_기본환율, 2), step=0.01, format='%.2f', key='conso_fx',
+                          help='기본값 = CTKonnect 연결패키지 IS 시트 M5 (1~결산월 평균환율)')
+    원화 = 통화선택.startswith('원화')
+    단위 = 'KRW' if 원화 else 'USD'
+    if 환율 <= 0:
+        st.warning('평균환율이 비어 있습니다 — 환율을 넣어야 두 법인을 같은 통화로 더할 수 있습니다.')
+
+    def _월끝(원장):
+        x = 원장[원장['계정분류'].eq('IS') & 원장['금액'].abs().gt(0.005)]
+        return int(x['월'].max()) if len(x) else 0
+    US끝 = _월끝(US원장)
+    KR끝 = _월끝(KR원장) if KR원장 is not None else 0
+    끝월 = min(US끝, KR끝) if KR원장 is not None else US끝
+
+    줄순서 = ['매출액', '매출원가', '매출총이익', '판매관리비', '영업이익', '영업외손익', '세전이익', '법인세비용', '당기순이익']
+    굵은줄 = {'매출액', '매출총이익', '영업이익', '세전이익', '당기순이익'}
+
+    def _손익(원장, 끝, 배수):
+        d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝)]
+        def S(m):
+            return d[m].groupby('월')['금액'].sum().reindex(range(1, 끝 + 1), fill_value=0.0) * 배수
+        o = {'매출액': S(d['분류'].eq('매출')), '매출원가': -S(d['분류'].eq('매출원가'))}
+        o['매출총이익'] = o['매출액'] - o['매출원가']
+        o['판매관리비'] = -S(d['분류'].eq('판관비'))
+        o['영업이익'] = o['매출총이익'] - o['판매관리비']
+        o['영업외손익'] = S(d['분류'].eq('영업외손익'))
+        o['세전이익'] = o['영업이익'] + o['영업외손익']
+        o['법인세비용'] = -S(d['분류'].isin(['법인세', '법인세비용']))
+        o['당기순이익'] = o['세전이익'] - o['법인세비용']
+        return pd.DataFrame(o).T.reindex(줄순서)
+
+    US배수 = (환율 if 원화 else 1.0) if 환율 > 0 or not 원화 else 0.0
+    KR배수 = (1.0 if 원화 else (1.0 / 환율 if 환율 > 0 else 0.0))
+
+    def _칸(v):
+        if v is None or pd.isna(v) or abs(v) < 0.5:
+            return '-'
+        t = f'{abs(v):,.0f}'
+        return f'<span class="neg">({t})</span>' if v < 0 else t
+
+    def _월표(제목, 원장, 끝, 배수, 원통화, 메모):
+        t = _손익(원장, 끝, 배수)
+        머리 = ''.join(f'<th>{m}월</th>' for m in range(1, 끝 + 1)) + '<th>누적</th>'
+        몸 = ''
+        for 이름 in 줄순서:
+            v = t.loc[이름]
+            굵 = ' style="font-weight:700"' if 이름 in 굵은줄 else ''
+            몸 += (f'<tr{굵}><td class="lft">{"" if 이름 in 굵은줄 else "&nbsp;&nbsp;"}{이름}</td>'
+                   + ''.join(f'<td>{_칸(v[m])}</td>' for m in range(1, 끝 + 1)) + f'<td><b>{_칸(v.sum())}</b></td></tr>')
+        st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
+          <h3>{제목} 손익계산서 — 1~{끝}월 <span class="unitbadge">단위 {단위}</span></h3>
+          <div class="sub">{메모}{'' if (원통화 == 단위) else f' · 원래 통화 {원통화} → 평균환율 {환율:,.2f} 원/USD 로 {단위} 환산'}</div>
+          <div class="scrollx"><table class="lined" style="width:100%; min-width:{260 + 92 * (끝 + 1)}px">
+            <thead><tr><th class="lft" style="width:150px">구분</th>{머리}</tr></thead><tbody>{몸}</tbody></table></div>
+        </div></div>""")
+        return t
+
+    탭1, 탭2, 탭3 = st.tabs(['① CTKonnect', '② 씨티케이커넥트', '③ 연결'])
+    with 탭1:
+        US표 = _월표('CTKonnect (미국 · CTKonnect, Inc.)', US원장, 끝월 or US끝, US배수, 'USD',
+                     f'연결패키지 「26년 원장_raw」 기준 · {_html.escape(str(쓰는파일 or ""))}')
+    with 탭2:
+        if KR원장 is None:
+            st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px; max-width:860px">
+              <h3>씨티케이커넥트 (한국 법인)</h3>
+              <div style="font-size:14.5px; line-height:1.9; color:{T['ink2']}">
+              {'씨티케이커넥트 연결패키지를 읽지 못했습니다 — ' + _html.escape(KR오류) if KR오류 else '아직 씨티케이커넥트 연결패키지가 없습니다.'}<br>
+              위 「씨티케이커넥트 연결패키지 올리기」 에서 CTKonnect 와 같은 양식(26년 원장_raw · BS_IS_매핑 시트)의 엑셀을 올려 주세요.</div></div></div>""")
+            KR표 = None
+        else:
+            KR표 = _월표('씨티케이커넥트 (한국 법인)', KR원장, 끝월, KR배수, 'KRW', f'연결패키지 「26년 원장_raw」 기준 · {_html.escape(KR파일)}')
+    with 탭3:
+        # 내부거래 : 손익 계정 줄 중 거래처가 상대 법인인 줄
+        def _내부(원장, 상대이름, 법인, 배수):
+            if 원장 is None:
+                return pd.DataFrame()
+            d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)].copy()
+            n = d['Name'].fillna('').astype(str).str.upper()
+            d = d[n.apply(lambda s: any(k.upper() in s for k in 상대이름))].copy()
+            d['법인'] = 법인
+            d['환산'] = d['금액'] * 배수
+            return d
+        IC = pd.concat([_내부(US원장, 한국이름, 'CTKonnect', US배수), _내부(KR원장, 미국이름, '씨티케이커넥트', KR배수)])
+        def _합(분류들):
+            return float(IC[IC['분류'].isin(분류들)]['환산'].sum()) if len(IC) else 0.0
+        내부매출 = _합(['매출'])
+        내부원가 = -_합(['매출원가'])
+        내부판관 = -_합(['판관비'])
+        내부외 = _합(['영업외손익'])
+        나머지 = 내부매출 - 내부원가 - 내부판관
+        조정 = pd.Series(0.0, index=줄순서)
+        if KR원장 is None:          # 상대 법인 자료가 없으면 한쪽만 지우면 손익이 틀어지므로 제거하지 않고 내역만 보여 줌
+            내부매출 = 내부원가 = 내부판관 = 내부외 = 나머지 = 0.0
+        if 나머지 < -0.5:            # 비용 쪽이 더 크면 상대 매출만큼만 지움 (원가 → 판관비 순) · 남는 것은 지우지 않고 알림
+            원가제거 = min(내부원가, 내부매출)
+            판관제거 = min(내부판관, max(내부매출 - 원가제거, 0.0))
+        else:
+            원가제거, 판관제거 = 내부원가, 내부판관
+        조정['매출액'] = -내부매출
+        조정['매출원가'] = -원가제거 - (나머지 if 나머지 > 0.5 else 0.0)
+        조정['판매관리비'] = -판관제거
+        조정['영업외손익'] = -내부외
+        조정['매출총이익'] = 조정['매출액'] - 조정['매출원가']
+        조정['영업이익'] = 조정['매출총이익'] - 조정['판매관리비']
+        조정['세전이익'] = 조정['영업이익'] + 조정['영업외손익']
+        조정['당기순이익'] = 조정['세전이익'] - 조정['법인세비용']
+        us = _손익(US원장, 끝월, US배수).sum(axis=1)
+        kr = _손익(KR원장, 끝월, KR배수).sum(axis=1) if KR원장 is not None else pd.Series(0.0, index=줄순서)
+        합 = us + kr
+        연결 = 합 + 조정
+        몸 = ''
+        for 이름 in 줄순서:
+            굵 = ' style="font-weight:700"' if 이름 in 굵은줄 else ''
+            몸 += (f'<tr{굵}><td class="lft">{"" if 이름 in 굵은줄 else "&nbsp;&nbsp;"}{이름}</td><td>{_칸(us[이름])}</td>'
+                   f'<td>{_칸(kr[이름]) if KR원장 is not None else "자료 없음"}</td><td>{_칸(합[이름])}</td>'
+                   f'<td>{_칸(조정[이름])}</td><td><b>{_칸(연결[이름])}</b></td></tr>')
+        가정글 = ''
+        if 나머지 > 0.5:
+            가정글 = (f'<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">「가정」 내부매출 {_칸(내부매출)} 중 '
+                      f'사는 법인 원장에서 상대 법인 이름으로 찾지 못한 {_칸(나머지)} 은, 결산월까지 모두 팔려 매출원가에 들어갔다고 보고 '
+                      f'매출원가에서 뺐습니다 (재고에 남은 내부이익은 빼지 않았습니다) — 실제 재고 · 매입 내역으로 바꿔야 합니다.</div>')
+        elif 나머지 < -0.5:
+            가정글 = (f'<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">내부거래 비용 {_칸(내부원가 + 내부판관)} 이 '
+                      f'상대 법인의 내부매출 {_칸(내부매출)} 보다 큽니다 — 매출만큼만 지우고 나머지 {_칸(-나머지)} 는 그대로 두었습니다 · 한쪽 장부에 빠진 거래가 있는지 확인 필요</div>')
+        if abs(내부외) > 0.5:
+            가정글 += (f'<div class="sub" style="color:#C00000; margin-top:4px">영업외 내부거래 두 법인 합계가 0 이 아닙니다 ({_칸(내부외)}) — '
+                       f'이자 · 수수료를 한쪽만 잡았는지 확인 필요</div>')
+        st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
+          <h3>연결 손익계산서 — 1~{끝월}월 누적 <span class="unitbadge">단위 {단위}</span></h3>
+          <div class="sub">평균환율 {환율:,.2f} 원/USD · {'CTKonnect 를 원화로 환산' if 원화 else '씨티케이커넥트를 달러로 환산'} ·
+            두 법인 모두 결산이 끝난 달(1~{끝월}월)까지 · 연결조정 = 두 법인 사이 거래 제거 (아래 내역)</div>
+          <div class="scrollx"><table class="lined" style="width:100%; min-width:760px">
+            <colgroup><col style="width:22%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"></colgroup>
+            <thead><tr><th class="lft">구분</th><th>① CTKonnect</th><th>② 씨티케이커넥트</th><th>단순합산</th><th>연결조정</th><th>연결</th></tr></thead>
+            <tbody>{몸}</tbody></table></div>{가정글}
+          {'' if KR원장 is not None else f'<div class="sub" style="margin-top:8px">씨티케이커넥트 자료가 아직 없어 ① CTKonnect 만 들어 있습니다 · 아래 내부거래는 씨티케이커넥트 자료가 들어오면 두 법인 함께 제거합니다.</div>'}
+        </div></div>""")
+        if len(IC):
+            줄 = ''.join(
+                f'<tr><td class="lft">{r["법인"]}</td><td>{r["거래일"]:%Y-%m-%d}</td><td class="lft">{_html.escape(str(r["계정과목"]))}</td>'
+                f'<td class="lft">{_html.escape(str(r["Name"]))}</td><td class="lft" style="font-weight:400">{_html.escape(str(r["Description"] or ""))[:60]}</td>'
+                f'<td>{_칸(r["환산"])}</td></tr>' for _, r in IC.sort_values(['법인', '거래일']).iterrows())
+            st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:12px">
+              <h3>연결조정 내역 — 두 법인 사이 손익 거래 <span class="unitbadge">단위 {단위}</span></h3>
+              <div class="sub">손익 계정 줄 중 거래처가 상대 법인(한국 : {' · '.join(한국이름)} / 미국 : CTKonnect, Inc.)인 줄 · 금액은 이익(+) · 비용(−) 기준</div>
+              <div class="scrollx"><table class="lined" style="width:100%; min-width:820px">
+                <thead><tr><th class="lft">법인</th><th>일자</th><th class="lft">계정</th><th class="lft">거래처</th><th class="lft">적요</th><th>금액</th></tr></thead>
+                <tbody>{줄}</tbody></table></div></div></div>""")
+        else:
+            st.caption('두 법인 사이 손익 거래를 찾지 못했습니다.')
     st.stop()
 
 try:
