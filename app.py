@@ -4232,6 +4232,7 @@ def _비밀값(열쇠, 기본):
 
 커_고객별칭 = {k: list(v) for k, v in dict(_비밀값('ctk_customer_alias', {})).items()}   # 통장 적요에서 거래처를 찾을 글자 (Secrets)
 커_거래처별칭 = {k: list(v) for k, v in dict(_비밀값('ctk_vendor_alias', {})).items()}   # 지급처 (Secrets)
+커_팩토링거래처 = [str(x) for x in _비밀값('ctk_factoring_customers', [])]   # 채권채무 ① 에서 원장처럼 건별로 보여 줄 팩토링 거래처 (Secrets · 나머지는 집계)
 
 
 def 커_이름정리(n):
@@ -4471,8 +4472,7 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
 
     def 합계줄(시작):
         return next(r for r in range(시작 + 2, ws.max_row + 1) if str(ws.cell(r, 2).value or '').strip() == '합계')
-    t1, t3 = 합계줄(s1), 합계줄(s3)
-    d1 = (s1 + 2, t1 - 1)
+    t3 = 합계줄(s3)
     d3 = (s3 + 2, t3 - 1)
 
     # ── 줄마다 값 · 모양 · 병합 · 높이 사진
@@ -4487,98 +4487,111 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
                 '병합': 병합.get(r, []), '높이': ws.row_dimensions[r].height, '원행': r}
     줄 = {r: 사진(r) for r in range(1, ws.max_row + 1)}
 
-    # ── 이전 줄에서 이어받을 글 (건/내용 · 비고)
-    이전1 = {}
-    for r in range(d1[0], d1[1] + 1):
+    # ── 이전 ① 구역의 비고 이어받기 : (일자, 차변, 대변) → 비고  (사용자가 적은 비고를 다음 달에도 유지)
+    def _날(v):
+        if isinstance(v, (datetime.datetime, datetime.date)):
+            return pd.Timestamp(v).normalize()
+        if isinstance(v, (int, float)) and 20000 < v < 80000:
+            return pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(v))
+        return None
+    def _수(v):
+        return round(float(v), 2) if isinstance(v, (int, float)) else 0.0
+    이전비고 = {}
+    for r in range(s1 + 1, s2):
         v = 줄[r]['값']
-        if v.get(2):
-            청 = v.get(4)
-            청 = pd.Timestamp(청).normalize() if isinstance(청, (datetime.datetime, datetime.date)) else (
-                pd.Timestamp('1899-12-30') + pd.Timedelta(days=float(청)) if isinstance(청, (int, float)) else None)
-            이전1[(커_이름정리(v[2]).upper(), 청, round(float(v.get(5) or 0), 0))] = (v.get(3), v.get(15))
+        d_ = _날(v.get(2))
+        if d_ is not None and v.get(10):
+            이전비고[(d_, _수(v.get(6)), _수(v.get(7)))] = v.get(10)
+    # 4. 팩토링 건별 원장(③)에서 건 번호 찾기 : (일자, 금액) → 'D1-1 · 브랜드'
+    건이름, 건번호 = {}, {}
+    for r, x in 줄.items():
+        v = x['값']
+        if re.fullmatch(r'D\d+', str(v.get(2) or '')) and v.get(3) and not isinstance(v.get(3), (datetime.datetime, datetime.date)):
+            건이름[str(v[2])] = str(v[3])
+    for r, x in 줄.items():
+        v = x['값']
+        if v.get(4) in ('매출', '회수') and re.match(r'D\d+', str(v.get(2) or '')) and _날(v.get(3)) is not None:
+            금 = v.get(9) if v.get(4) == '매출' else v.get(10)
+            if isinstance(금, (int, float)):
+                기본 = re.match(r'D\d+', str(v[2])).group(0)
+                건번호[(_날(v.get(3)), round(float(금), 0))] = f'{v[2]} · {건이름.get(기본, "")}'.rstrip(' ·')
+
     이전3 = []
     for r in range(d3[0], d3[1] + 1):
         v = 줄[r]['값']
         if v.get(2):
             이전3.append((str(v.get(2)), str(v.get(3) or ''), v.get(8)))
 
-    # ── ① 매출채권 : 거래처별 청구(차변)를 오래된 것부터 회수(대변)로 지움 (결산월 말까지)
+    # ── ① 매출채권 · 선수금 : 팩토링 거래처는 원장처럼 건별, 그 외는 거래처별 집계
     ar계정 = [a for a in g['계정'].unique() if 한글(a) == '매출채권'] or [a for a in g['계정'].unique() if a.startswith('11501')]
-    ar = g[g['계정'].isin(ar계정)]
-    행1 = []
-    _고객키 = ar['고객'].fillna('(거래처 미상)').map(lambda n: 커_이름정리(n).upper())
-    for _k, x in ar[ar['일자'] <= 끝날].groupby(_고객키):
-        고객 = x['고객'].dropna().iloc[0] if x['고객'].notna().any() else '(거래처 미상)'
-        x = x.sort_values(['일자', 'TID'], kind='stable')
-        큐 = []
-        초과, 마지막입금 = 0.0, None
-        for _, y in x.iterrows():
-            돈 = 0.0
-            if y['차'] > 0:
-                큐.append([y['일자'], float(y['차']), 0.0, y['적요']])
-                돈, 초과 = 초과, 0.0                 # 먼저 더 받아 둔 돈(선수)은 새 청구에 먼저 씀
-            돈 += float(y['대'])
-            if float(y['대']) > 0:
-                마지막입금 = y['일자']
-            for q in 큐:
-                if 돈 <= 1e-9:
-                    break
-                남 = q[1] - q[2]
-                if 남 <= 1e-9:
-                    continue
-                뺄 = min(돈, 남)
-                q[2] += 뺄
-                돈 -= 뺄
-            초과 += 돈
-        이름 = 커_이름정리(고객)
-        열린 = []
-        for q in 큐:                       # 결산월 말에 남은 청구 — 같은 날 청구는 한 건으로 (중개 + IOR 등)
-            if q[1] - q[2] <= 0.005:
-                continue
-            if 열린 and 열린[-1][0] == q[0]:
-                열린[-1][1] += q[1]
-                열린[-1][2] += q[2]
-                if q[3] and q[3] not in str(열린[-1][3]):
-                    열린[-1][3] = f'{열린[-1][3]} + {q[3]}' if 열린[-1][3] else q[3]
-            else:
-                열린.append(list(q))
-        # 결산 후 회수 : 원장(결산월 다음날~) 대변 + 통장(원장 끝 다음날~) 입금
-        뒤원장 = float(ar[(ar['일자'] > 끝날) & (_고객키 == _k)]['대'].sum())
-        뒤통장, 열쇠 = 0.0, _커_열쇠말(이름, 커_고객별칭)
-        if 통장 is not None and 열쇠:
-            u = 통장[(통장['일자'] > 원장끝) & (통장['입금'] > 0)]
-            if '채권회수' in set(u['세부']):
-                u = u[u['세부'].eq('채권회수')]
-            뒤통장 = float(u[u['적요U'].apply(lambda s: any(k in s for k in 열쇠))]['입금'].sum())
-        뒤 = 뒤원장 + 뒤통장
-        for q in 열린:
-            남 = q[1] - q[2]
-            쓸 = min(남, 뒤)
-            뒤 -= 쓸
-            행1.append({'거래처': 이름, '청구일': q[0], '청구액': q[1], '회수전': q[2], '회수후': 쓸, '적요': q[3]})
-        if 초과 > 0.005:
-            행1.append({'거래처': 이름, '청구일': 마지막입금, '청구액': 0.0, '회수전': 초과, '회수후': 0.0,
-                        '적요': '청구 없는 입금 (초과입금)', '초과': True})
-        if 뒤 > 0.5 and (열린 or 초과 > 0.005):
-            행1[-1]['남은입금'] = 뒤
-    행1.sort(key=lambda d: (-(d['청구액'] - d['회수전']), d['거래처']))
-    for d in 행1:
-        키 = (d['거래처'].upper(), pd.Timestamp(d['청구일']).normalize() if d['청구일'] is not None else None, round(d['청구액'], 0))
-        내용, 비고 = 이전1.get(키, (None, None))
-        if 내용 is None:      # 이름만 같은 이전 줄 (청구일 · 금액이 달라도 같은 건이면)
-            for (n, _c, _a), (c2, o2) in 이전1.items():
-                if n == d['거래처'].upper() and _a == round(d['청구액'], 0):
-                    내용, 비고 = c2, o2
-        d['내용'] = 내용 or (d['적요'] or '')
-        if d.get('초과'):
-            d['비고'] = '청구보다 더 받음 — 다음 청구와 상계 필요'
-        else:
-            d['비고'] = 비고 if 비고 and not str(비고).startswith(('결산 후 입금', '청구보다')) else (비고 or '')
-        if d.get('남은입금'):
-            d['비고'] = (str(d['비고']) + ' · ' if d['비고'] else '') + \
-                f'결산 후 입금 {d["남은입금"]:,.0f} 은 결산 뒤 청구분 회수로 보임 — 확인 필요'
-    if 원장끝 > 끝날 and float(ar[ar['일자'] > 끝날]['차'].sum()) > 0.5:
-        안내.append(f'원장에 결산월 뒤 청구 {float(ar[ar["일자"] > 끝날]["차"].sum()):,.0f} 이 있어 채권 표에는 넣지 않았습니다.')
+    선수계정 = [a for a in g['계정'].unique() if 한글(a) == '선수금'] or [a for a in g['계정'].unique() if a.startswith('21511')]
+    def _이름열(x):
+        return x['고객'].where(x['고객'].notna(), x['거래처원']).fillna('(거래처 표시 없음)').map(커_이름정리)
+    def _팩토링(n):
+        u = 커_이름정리(n).upper()
+        return any(k.upper() in u for k in 커_팩토링거래처)
+    def _뒤통장(이름):
+        """원장이 끝난 뒤 통장 입금 중 이 거래처 것 (적요 글자로 찾음)."""
+        열쇠 = _커_열쇠말(이름, 커_고객별칭)
+        if 통장 is None or not 열쇠:
+            return 통장.iloc[0:0] if 통장 is not None else None
+        u = 통장[(통장['일자'] > 원장끝) & (통장['입금'] > 0)]
+        if '채권회수' in set(u['세부']):
+            u = u[u['세부'].eq('채권회수')]
+        return u[u['적요U'].apply(lambda s: any(k in s for k in 열쇠))]
+    전체 = []
+    for 종류, 계정들 in (('매출채권', ar계정), ('선수금', 선수계정)):
+        x = g[g['계정'].isin(계정들)].copy()
+        if not len(x):
+            continue
+        x['이름'] = _이름열(x)
+        x['종류'] = 종류
+        전체.append(x)
+    전체 = pd.concat(전체) if 전체 else g.iloc[0:0].assign(이름=None, 종류=None)
+    팩토링이름 = sorted({n for n in 전체['이름'] if _팩토링(n)})
+    원장1 = []          # 팩토링 거래처 : [(거래처, 종류, 줄들, 결산후줄들)]
+    for 이름 in 팩토링이름:
+        for 종류 in ('매출채권', '선수금'):
+            x = 전체[(전체['이름'] == 이름) & (전체['종류'] == 종류)].sort_values(['일자', 'TID'], kind='stable')
+            전 = x[x['일자'] <= 끝날]
+            뒤 = []
+            if 종류 == '매출채권':
+                for _, y in x[(x['일자'] > 끝날) & (x['대'] > 0)].iterrows():
+                    뒤.append((y['일자'], y['적요'], float(y['대']), f'원장 TID {_커_번호(y["TID"])}'))
+                u = _뒤통장(이름)
+                if u is not None:
+                    for _, y in u.iterrows():
+                        뒤.append((y['일자'], str(y.get('적요') or ''), float(y['입금']), '통장 · 장부 반영 전'))
+            원장1.append((이름, 종류, 전, 뒤))
+    집계 = []           # 그 외 거래처
+    for (이름, 종류), x in 전체[~전체['이름'].isin(팩토링이름)].groupby(['이름', '종류'], sort=False):
+        전 = x[x['일자'] <= 끝날]
+        차, 대 = float(전['차'].sum()), float(전['대'].sum())
+        잔 = 차 - 대 if 종류 == '매출채권' else 대 - 차
+        if abs(차) < 0.005 and abs(대) < 0.005:
+            continue
+        뒤 = 0.0
+        if 종류 == '매출채권':
+            뒤 = float(x[x['일자'] > 끝날]['대'].sum())
+            u = _뒤통장(이름)
+            if u is not None:
+                뒤 += float(u['입금'].sum())
+        회수후 = min(max(잔, 0.0), 뒤)
+        비 = []
+        if 종류 == '매출채권' and 뒤 - 회수후 > 0.5:
+            비.append(f'결산 후 입금 {뒤:,.0f} 중 {뒤 - 회수후:,.0f} 은 결산 뒤 청구분 회수로 보임 — 확인 필요')
+        if 종류 == '매출채권' and 잔 < -0.5:
+            비.append('청구보다 더 받음 — 다음 청구와 상계 또는 선수금 대체 필요')
+        # 적요에 팩토링 거래처 이름이 있는데 퀵북 거래처가 다른 줄 (확인용)
+        for _, y in 전.iterrows():
+            for k in 커_팩토링거래처:
+                if k.upper() in str(y['적요']).upper():
+                    비.append(f'{y["일자"]:%m/%d} TID {_커_번호(y["TID"])} 「{y["적요"]}」 {max(y["차"], y["대"]):,.0f} 은 '
+                              f'적요는 {k} 인데 퀵북 거래처가 {이름} — 확인 필요')
+        집계.append({'거래처': 이름, '종류': 종류, '차': 차, '대': 대, '잔': 잔, '뒤': 회수후, '비고': ' · '.join(비)})
+    집계.sort(key=lambda d: (0 if d['종류'] == '매출채권' else 1, -d['잔'], d['거래처']))
+    if 원장끝 > 끝날 and float(전체[(전체['종류'] == '매출채권') & (전체['일자'] > 끝날)]['차'].sum()) > 0.5:
+        안내.append(f'원장에 결산월 뒤 청구 {float(전체[(전체["종류"] == "매출채권") & (전체["일자"] > 끝날)]["차"].sum()):,.0f} 이 있어 채권 표에는 넣지 않았습니다.')
 
     # ── ③ 채무 : 미지급금 · 단기차입금 거래처별 결산월 말 잔액
     채무계정 = [a for a in g['계정'].unique() if 한글(a) in ('미지급금', '단기차입금')]
@@ -4652,26 +4665,120 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
                 ws.cell(r, c).value = re.sub(rf'(\$?[A-Z]+\$?){원a}:(\$?[A-Z]+\$?){원b}\b',
                                              rf'\g<1>{새a}:\g<2>{새b}', v)
 
+    # 모양 견본 — ② 표(달마다 그대로인 표)의 머리 · 본문 · 합계 줄에서 가져옴
+    t2 = next(r for r in range(s2 + 2, max(줄) + 1) if str(줄[r]['값'].get(2) or '').strip() == '합계')
+    견머리, 견본, 견합 = 줄[s2 + 1]['모양'], 줄[s2 + 2]['모양'], 줄[t2]['모양']
+    빨강 = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True, color='FFC00000')
+    옅음 = openpyxl.styles.PatternFill('solid', fgColor='FFF2F2F2')
+
     # 1~머리줄
-    for r in range(1, d1[0]):
+    for r in range(1, s1):
         놓기(줄[r])
-    # ① 표
-    틀 = 줄[d1[0]]
-    a1 = 새[0]
-    for d in (행1 or [None]):
-        값 = {} if d is None else {2: d['거래처'], 3: d['내용'] or None, 4: pd.Timestamp(d['청구일']).to_pydatetime() if d['청구일'] is not None else None,
-                                     5: round(d['청구액'], 2), 6: round(d['회수전'], 2), 8: round(d['회수후'], 2), 15: d['비고'] or None}
-        if d is None:
-            값 = {c: None for c in (2, 3, 4, 5, 6, 8, 15)}
-        r_ = 놓기(틀, 값)
-        if ws.cell(r_, 4).number_format == 'General':
-            ws.cell(r_, 4).number_format = 'mm-dd'
-    b1 = 새[0] - 1
-    for r in range(t1, s3 + 2):          # 합계 · 회수 못한 금액 · 메모 · ② 구역 전체 · ③ 제목 · 머리
-        새r = 놓기(줄[r])
-        if r in (t1, t1 + 1):
-            off = 새r - r
-            범위고침(새r, d1[0] + off, d1[1] + off, a1, b1)
+
+    def 칸(r, c, v=None, 모양=None, 형식=None, 굵게=False, 글=None):
+        m = 모양 or 견본
+        _커_입히기(ws.cell(r, c), m.get(5) if 형식 else m.get(2))     # 모든 칸 같은 모양 (글자칸 = B열 견본, 숫자칸 = E열 견본)
+        if v is not None:
+            ws.cell(r, c).value = v
+        if 형식:
+            ws.cell(r, c).number_format = 형식
+        if 굵게 or 글:
+            ws.cell(r, c).font = 글 or openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True)
+    숫형 = '#,##0;\\(#,##0\\);"-"'
+    def 줄쓰기(값들, 모양, 합칠=(), 숫자칸=(), 왼칸=(), 굵게=False):
+        r = 새[0]
+        for c in range(2, 16):
+            칸(r, c, 값들.get(c), 모양, 숫형 if c in 숫자칸 else None, 굵게)
+            ws.cell(r, c).alignment = openpyxl.styles.Alignment(
+                horizontal='right' if c in 숫자칸 else ('left' if c in 왼칸 else 'center'), vertical='center')
+        for a, b in 합칠:
+            ws.merge_cells(start_row=r, start_column=a, end_row=r, end_column=b)
+        새[0] += 1
+        return r
+    def 제목(글, 굵게=True):
+        r = 새[0]
+        ws.cell(r, 2).value = 글
+        ws.cell(r, 2).font = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=굵게)
+        새[0] += 1
+        return r
+
+    제목(f'1. 매출채권 · 선수금 — 팩토링 거래처는 원장처럼 건별 (발생 · 회수), 그 외 거래처는 집계')
+    팩토링잔 = {'매출채권': 0.0, '선수금': 0.0}
+    머리1 = {2: '일자', 3: '거래처', 4: '적요', 6: '차변', 7: '대변', 9: '잔액', 10: '비고'}
+    합1 = ((4, 5), (7, 8), (10, 15))
+    for i, 이름 in enumerate(팩토링이름, 1):
+        새[0] += 1
+        제목(f'1-{i}. 팩토링 — {이름} : 매출채권 · 선수금 원장 ({md(끝날)} 결산)')
+        줄쓰기(머리1, 견머리, 합1)
+        for (n, 종류, 전, 뒤) in [t for t in 원장1 if t[0] == 이름]:
+            r = 줄쓰기({2: f'계정명 : {종류}'}, 견본, ((2, 15),), 왼칸=(2,), 굵게=True)
+            for c in range(2, 16):
+                ws.cell(r, c).fill = 옅음
+            첫 = 새[0]
+            if not len(전):
+                줄쓰기({3: n, 4: '해당 거래 없음', 6: 0, 7: 0, 9: 0}, 견본, 합1, (6, 7, 9), (3, 4, 10))
+            for _, y in 전.iterrows():
+                키 = (pd.Timestamp(y['일자']).normalize(), round(float(y['차']), 2), round(float(y['대']), 2))
+                비 = 이전비고.get(키)
+                if not 비:
+                    건 = 건번호.get((키[0], round(max(float(y['차']), float(y['대'])), 0)))
+                    비 = ' · '.join(x for x in (건, f'TID {_커_번호(y["TID"])}') if x)
+                r = 새[0]
+                잔식 = (f'=F{r}-G{r}' if r == 첫 else f'=I{r - 1}+F{r}-G{r}') if 종류 == '매출채권' else \
+                       (f'=G{r}-F{r}' if r == 첫 else f'=I{r - 1}+G{r}-F{r}')
+                줄쓰기({2: pd.Timestamp(y['일자']).to_pydatetime(), 3: n, 4: y['적요'] or None,
+                       6: round(float(y['차']), 2) or None, 7: round(float(y['대']), 2) or None, 9: 잔식, 10: 비},
+                      견본, 합1, (6, 7, 9), (3, 4, 10))
+                ws.cell(r, 2).number_format = 'yyyy-mm-dd'
+            끝 = 새[0] - 1
+            잔 = float(전['차'].sum() - 전['대'].sum()) if 종류 == '매출채권' else float(전['대'].sum() - 전['차'].sum())
+            팩토링잔[종류] += 잔
+            r = 줄쓰기({2: f'{md(끝날)} 잔액', 6: f'=SUM(F{첫}:F{끝})', 7: f'=SUM(G{첫}:G{끝})'}, 견합, 합1, (6, 7, 9), 굵게=True)
+            ws.cell(r, 9).value = (f'=F{r}-G{r}' if 종류 == '매출채권' else f'=G{r}-F{r}')
+            ws.cell(r, 10).value = f'BS {종류} 중 {n} 몫'
+            ws.cell(r, 10).alignment = openpyxl.styles.Alignment(horizontal='left', vertical='center')
+            if 뒤:
+                잔행 = r
+                for (d_, 적, 금, 근) in sorted(뒤, key=lambda t: t[0]):
+                    r = 새[0]
+                    줄쓰기({2: pd.Timestamp(d_).to_pydatetime(), 3: n, 4: f'(결산 후) {적}', 7: round(금, 2),
+                           9: f'=I{r - 1}-G{r}', 10: 근}, 견본, 합1, (6, 7, 9), (3, 4, 10))
+                    ws.cell(r, 2).number_format = 'yyyy-mm-dd'
+                    ws.cell(r, 10).font = 빨강
+                r = 줄쓰기({2: '결산 후 회수 반영 뒤 남은 금액', 9: f'=I{새[0] - 1}'}, 견합, ((2, 5), (7, 8), (10, 15)), (6, 7, 9), 굵게=True)
+                ws.cell(r, 2).alignment = openpyxl.styles.Alignment(horizontal='left', vertical='center')
+    # 그 외 거래처 집계
+    새[0] += 1
+    제목(f'1-{len(팩토링이름) + 1}. 그 외 거래처 — 집계 (1/1 ~ {md(끝날)})')
+    줄쓰기({2: '거래처', 3: '계정명', 4: '차변', 5: '대변', 6: f'{md(끝날)} 잔액', 7: f'{md(다음날)} 이후 회수', 9: '남은 금액', 10: '비고'},
+          견머리, ((7, 8), (10, 15)))
+    집합 = {}
+    for 종류 in ('매출채권', '선수금'):
+        행 = [d for d in 집계 if d['종류'] == 종류]
+        첫 = 새[0]
+        for d in (행 or [None]):
+            r = 새[0]
+            if d is None:
+                줄쓰기({2: '해당 거래 없음', 3: 종류, 4: 0, 5: 0, 6: 0}, 견본, ((7, 8), (10, 15)), (4, 5, 6, 7, 9), (2, 3, 10))
+                continue
+            줄쓰기({2: d['거래처'], 3: 종류, 4: round(d['차'], 2), 5: round(d['대'], 2),
+                   6: (f'=D{r}-E{r}' if 종류 == '매출채권' else f'=E{r}-D{r}'),
+                   7: round(d['뒤'], 2) if 종류 == '매출채권' else None,
+                   9: (f'=F{r}-G{r}' if 종류 == '매출채권' else None), 10: d['비고'] or None},
+                  견본, ((7, 8), (10, 15)), (4, 5, 6, 7, 9), (2, 3, 10))
+        끝 = 새[0] - 1
+        r = 새[0]
+        줄쓰기({2: f'{종류} 소계', 4: f'=SUM(D{첫}:D{끝})', 5: f'=SUM(E{첫}:E{끝})', 6: f'=SUM(F{첫}:F{끝})',
+               7: f'=SUM(G{첫}:G{끝})' if 종류 == '매출채권' else None, 9: f'=SUM(I{첫}:I{끝})' if 종류 == '매출채권' else None},
+              견합, ((2, 3), (7, 8), (10, 15)), (4, 5, 6, 7, 9), 굵게=True)
+        집합[종류] = sum(d['잔'] for d in 행)
+    bs = {k: 팩토링잔[k] + 집합.get(k, 0.0) for k in ('매출채권', '선수금')}
+    제목(f'※ {md(끝날)} 매출채권 = 팩토링 {팩토링잔["매출채권"]:,.0f} + 그 외 {집합.get("매출채권", 0):,.0f} = {bs["매출채권"]:,.0f} (BS 매출채권) · '
+         f'선수금 = 팩토링 {팩토링잔["선수금"]:,.0f} + 그 외 {집합.get("선수금", 0):,.0f} = {bs["선수금"]:,.0f} · '
+         f'결산 후 회수 = 원장({md(원장끝)}까지) 대변' + (f' + 통장({md(통장끝)}까지) 입금' if 통장끝 is not None else ''), 굵게=False)
+    # ② 구역 ~ ③ 머리
+    for r in range(s2 - 1, s3 + 2):
+        놓기(줄[r])
     # ③ 표
     틀3 = 줄[d3[0]]
     a3 = 새[0]
@@ -4685,6 +4792,15 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
         if r == t3:
             off = 새r - r
             범위고침(새r, d3[0] + off, d3[1] + off, a3, b3)
+
+    # ② 표 지급일이 숫자(46198)로 보이던 것 → 날짜 모양
+    머2 = next((r for r in range(1, ws.max_row + 1) if ws.cell(r, 4).value == '지급일'), None)
+    if 머2:
+        for r in range(머2 + 1, ws.max_row + 1):
+            if str(ws.cell(r, 2).value or '').strip() == '합계':
+                break
+            if isinstance(ws.cell(r, 4).value, (int, float)) and 30000 < ws.cell(r, 4).value < 80000:
+                ws.cell(r, 4).number_format = 'yyyy-mm-dd'
 
     # ── 머리 글 · 기준일 · 메모
     for r in range(1, ws.max_row + 1):
@@ -4702,17 +4818,12 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
     기준칸 = next(((r, c) for r in range(1, 6) for c in range(2, 최대열 + 1) if ws.cell(r, c).value == '기준일'), None)
     if 기준칸:
         ws.cell(기준칸[0], 기준칸[1] + 1).value = pd.Timestamp(기준일).to_pydatetime()
-    메모1 = b1 + 3
-    if str(ws.cell(메모1, 2).value or '').startswith('※'):
-        ar합 = sum(round(d['청구액'] - d['회수전'], 2) for d in 행1)
-        ws.cell(메모1, 2).value = (f'※ {md(끝날)} 장부잔액 합계 {ar합:,.0f} = BS 매출채권. '
-                                   '결산 후 입금 중 결산월 미수를 넘는 금액은 결산 뒤 청구분으로 보아 비고에 적었습니다.')
     메모3 = b3 + 2
     if 메모3 <= ws.max_row and str(ws.cell(메모3, 2).value or '').startswith('※'):
         ws.cell(메모3, 2).value = (f'※ {md(다음날)} 이후 지급 = 원장({md(원장끝)}까지) 차변'
                                    + (f' + 통장({md(통장끝)}까지) 출금' if 통장끝 is not None else '')
                                    + ' · 결산월 말 잔액을 넘는 지급은 넣지 않았습니다.')
-    안내.append(f'채권채무 : 매출채권 {len(행1)}줄 · 채무 {len(행3)}줄을 새로 썼습니다 (② 미청구 대납비용 표는 그대로).'
+    안내.append(f'채권채무 : ① 팩토링({", ".join(팩토링이름) or "없음"}) 원장 · 그 외 거래처 집계 {len(집계)}줄, ③ 채무 {len(행3)}줄을 새로 썼습니다 (② 미청구 대납비용 표는 그대로).'
               + (f' 미지급금 차변잔액(결산조정분개로 자산 대체)은 채무 표에서 뺐습니다 : {" · ".join(건너뜀)}' if 건너뜀 else ''))
     return 안내
 
@@ -7180,6 +7291,20 @@ if 메뉴 == '실적보고 엑셀작성':
         st.radio('올리는 곳', ['씨티케이커넥트', 'CTKonnect'], key='올린곳_작성', index=None,
                  horizontal=True, label_visibility='collapsed')
 
+    _있는번호 = [int(m.group(1)) for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+                 for m in [re.search(rf'_연결패키지_CTKonnect_{_결산월}월말_v(\d+)', os.path.basename(f))] if m]
+    for _올린이름 in [str(_전월이름 or ''), 쓰던파일이름() or '']:
+        _m2 = re.search(rf'_연결패키지_CTKonnect_{_결산월}월말_v(\d+)', _올린이름)
+        if _m2:
+            _있는번호.append(int(_m2.group(1)))
+    _버1, _버2 = st.columns([1, 3.2], gap='small')
+    _버전 = _버1.number_input(f'{_결산월}월말 버전 번호', min_value=1, step=1, value=max(_있는번호 or [0]) + 1,
+                              key=f'ctk_ver_{_결산월}',
+                              help='기본값 = 자료실에 있는 같은 달 연결패키지의 마지막 번호 + 1')
+    _버2.caption(f'파일 이름 : 「…연결패키지_CTKonnect_{_결산월}월말_v{int(_버전)}.xlsx」 · '
+                 + (f'자료실 마지막 = v{max(_있는번호)}' if _있는번호 else
+                    '자료실에서 같은 달 파일을 못 찾았습니다 (웹사이트에서는 PC 자료실 마지막 번호 + 1 을 직접 넣어 주세요)'))
+
     if st.button('⚙  연결패키지 만들기', type='primary', key='ctk_make'):
         try:
             with st.spinner('연결패키지를 만드는 중입니다 (10~20초)...'):
@@ -7192,9 +7317,12 @@ if 메뉴 == '실적보고 엑셀작성':
                     pass
             _연 = int(_안내['연도'])
             _폴더 = os.path.join(자료실, f'{_연}년 {_결산월}월')
-            _번호 = [int(m.group(1)) for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
-                     for m in [re.search(rf'_연결패키지_CTKonnect_{_결산월}월말_v(\d+)\.xlsx$', os.path.basename(f))] if m]
-            _이름 = f'{_연}. {(_결산월 - 1) // 3 + 1}Q_연결패키지_CTKonnect_{_결산월}월말_v{max(_번호 or [0]) + 1}.xlsx'
+            _이름 = f'{_연}. {(_결산월 - 1) // 3 + 1}Q_연결패키지_CTKonnect_{_결산월}월말_v{int(_버전)}.xlsx'
+            if os.path.exists(os.path.join(_폴더, _이름)):      # 같은 이름이 이미 있으면 덮어쓰지 않고 다음 번호로
+                _n = int(_버전)
+                while os.path.exists(os.path.join(_폴더, _이름)):
+                    _n += 1
+                    _이름 = f'{_연}. {(_결산월 - 1) // 3 + 1}Q_연결패키지_CTKonnect_{_결산월}월말_v{_n}.xlsx'
             try:
                 os.makedirs(_폴더, exist_ok=True)
                 with open(os.path.join(_폴더, _이름), 'wb') as _f:
