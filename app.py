@@ -7773,10 +7773,18 @@ def 자료종류(바이트):
         return '원장'
     if any('분개장' in s for s in 시트) and 한국분개장인지(바이트):
         return '원장'                       # 씨티케이커넥트 더존 분개장 (2026-11-03)
+    try:                                    # 퀵북 General Ledger — 머리글로 판별 (시트 이름이 「분개장_8월누적」 등이어도)
+        _w = openpyxl.load_workbook(io.BytesIO(바이트), read_only=True)
+        for _r in _w[_w.sheetnames[0]].iter_rows(min_row=1, max_row=8, values_only=True):
+            _글 = ' '.join(str(x) for x in _r if x is not None)
+            if 'Distribution account' in _글 and 'Transaction date' in _글:
+                return '원장'
+    except Exception:
+        pass
     return ''
 
 
-종류이름 = {'실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '한국분개장': '씨티케이커넥트 분개장 → 패키지로 변환', '원장': '원장 원본', '양식': '연결패키지 양식'}
+종류이름 = {'원장반영': 'CTKonnect 원장 → 패키지에 반영', '실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '한국분개장': '씨티케이커넥트 분개장 → 패키지로 변환', '원장': '원장 원본', '양식': '연결패키지 양식'}
 
 
 KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'      # 씨티케이커넥트(한국 법인) 연결패키지 자리
@@ -7806,12 +7814,15 @@ def _KR패키지인가(바이트):
         return False
 
 
-def KR분개장반영(바이트, 이름=''):
-    """더존 분개장 → 지금 있는 씨티케이커넥트 패키지를 전월 양식으로 삼아 새 패키지를 만들어 KR 자리에 둡니다 → (됨, 안내글)."""
-    도장 = (str(이름), len(바이트))
+def KR분개장반영(바이트, 이름='', 양식=None, 양식이름=''):
+    """더존 분개장 → 씨티케이커넥트 패키지(함께 올린 것, 없으면 지금 있는 것)를 양식으로 새 패키지를 만들어 KR 자리에 둡니다 → (됨, 안내글)."""
+    도장 = (str(이름), len(바이트), str(양식이름), len(양식 or b''))
     if st.session_state.get('_KR분개장도장') == 도장:
         return True, st.session_state.get('_KR분개장안내', '')
-    전월, 전월이름 = _KR패키지바이트(분개장보기=False)
+    if 양식:
+        전월, 전월이름 = 양식, 양식이름
+    else:
+        전월, 전월이름 = _KR패키지바이트(분개장보기=False)
     if not 전월:
         return False, ('분개장만으로는 처음 패키지를 만들 수 없습니다 — 씨티케이커넥트 연결패키지(「…연결패키지_씨티케이커넥트_…」)를 '
                        '한 번 올려 주시면, 그다음부터는 분개장만 올려도 됩니다.')
@@ -7892,9 +7903,99 @@ def _KR패키지바이트(분개장보기=True):
     return None, ''
 
 
+def _US원장인가(바이트):
+    """퀵북 원장(General Ledger)인지 — 씨티케이커넥트 분개장 · 연결패키지는 아님."""
+    if _KR패키지인가(바이트) or 한국분개장인지(바이트):
+        return False
+    return 자료종류(바이트) == '원장'
+
+
+def US올린것처리(파일들):
+    """CTKonnect 퀵북 원장 · 연결패키지를 한꺼번에 → 새 패키지를 만들어 화면 자료로 씁니다 → (됨, 안내글) 은 session 에."""
+    패키지 = [f for f in 파일들 or [] if _KR패키지인가(f.getvalue()) and not 한국법인자료(f.getvalue(), f.name)]
+    원장 = [f for f in 파일들 or [] if _US원장인가(f.getvalue())]
+    도장 = tuple(sorted((f.name, len(f.getvalue())) for f in 패키지 + 원장))
+    if not 도장 or st.session_state.get('_US올림도장') == 도장:
+        return
+    st.session_state['_US올림도장'] = 도장
+    if 패키지:
+        양식, 양식이름 = 패키지[-1].getvalue(), 패키지[-1].name
+    elif os.path.exists(CACHE_PATH):
+        with open(CACHE_PATH, 'rb') as _f:
+            양식 = _f.read()
+        양식이름 = 쓰던파일이름() or CACHE_PATH
+    else:
+        양식, 양식이름 = None, ''
+    if not 원장:
+        결과, 새이름, 글 = 양식, 양식이름, f'CTKonnect 연결패키지 「{양식이름}」 를 그대로 씁니다.'
+    elif not 양식:
+        st.session_state['_US올림안내'] = (False, '원장만으로는 처음 패키지를 만들 수 없습니다 — CTKonnect 연결패키지를 함께 올려 주세요.')
+        return
+    else:
+        _자리에쓰기(원장보관, 원장[-1].getvalue(), 원장[-1].name)
+        try:
+            with st.spinner('원장으로 CTKonnect 연결패키지를 만드는 중입니다 (10~20초)...'):
+                결과, 안내 = 커_패키지만들기(원장[-1].getvalue(), 양식)
+        except Exception as e:
+            st.session_state['_US올림안내'] = (False, f'원장으로 패키지를 만들지 못했습니다 — {e}')
+            return
+        연, 월 = int(안내['연도']), int(안내['결산월'])
+        _m = re.search(rf'_{월}월말_v(\d+)', str(양식이름))
+        새이름 = f'{연}. {(월 - 1) // 3 + 1}Q_연결패키지_CTKonnect_{월}월말_v{int(_m.group(1)) + 1 if _m else 1}.xlsx'
+        글 = (f'원장 「{원장[-1].name}」 → 「{새이름}」 (양식 = {양식이름}) · '
+              f'{안내["원장끝"]:%Y-%m-%d} 까지 · 결산월 {월}월 · 환율은 양식 값 그대로')
+    try:
+        with open(CACHE_PATH, 'wb') as _f:
+            _f.write(결과)
+        with open(이름기록, 'w', encoding='utf-8') as _f:
+            _f.write(새이름)
+    except OSError:
+        pass
+    보관해두기(결과, 새이름)
+    st.session_state['_US올림안내'] = (True, 글)
+
+
+def KR올린것처리(파일들):
+    """씨티케이커넥트 자료 여러 개(분개장 · 연결패키지)를 한꺼번에 → KR 자리에 반영하고 안내글을 남깁니다."""
+    패키지 = [f for f in 파일들 or [] if _KR패키지인가(f.getvalue()) and 한국법인자료(f.getvalue(), f.name)]
+    분개장 = [f for f in 파일들 or [] if 한국분개장인지(f.getvalue())]
+    양식, 양식이름 = (패키지[-1].getvalue(), 패키지[-1].name) if 패키지 else (None, '')
+    if 분개장:
+        try:
+            _됨, _글 = KR분개장반영(분개장[-1].getvalue(), 분개장[-1].name, 양식, 양식이름)
+        except Exception as e:
+            _됨, _글 = False, f'분개장으로 패키지를 만들지 못했습니다 — {e}'
+        st.session_state['_KR올림안내'] = (_됨, _글)
+    elif 양식:
+        KR보관하기(양식, 양식이름)
+        st.session_state['_KR올림안내'] = (True, f'씨티케이커넥트 연결패키지 「{양식이름}」 를 그대로 씁니다.')
+    elif 파일들:
+        st.session_state['_KR올림안내'] = (False, '씨티케이커넥트 분개장이나 연결패키지가 아닙니다 — 더존 분개장 · 「…연결패키지_씨티케이커넥트_…」 를 올려 주세요.')
+
+
 def 자료받기(파일들):
     """올려 주신 파일을 안을 보고 제자리에 넣습니다 → (실적 엑셀 파일, [(이름, 종류)])."""
     실적, 목록 = None, []
+    # 씨티케이커넥트 분개장 + 패키지를 함께 올리면 패키지를 양식으로 분개장을 반영 (2026-11-03)
+    _kr패키지 = [f for f in 파일들 or [] if _KR패키지인가(f.getvalue()) and 한국법인자료(f.getvalue(), f.name)]
+    _kr분개장 = [f for f in 파일들 or [] if 한국분개장인지(f.getvalue())]
+    if _kr분개장:
+        KR올린것처리(_kr패키지 + _kr분개장)
+        for f in _kr패키지:
+            목록.append((f.name, '한국실적'))
+        for f in _kr분개장:
+            _자리에쓰기(원장보관, f.getvalue(), f.name)
+            목록.append((f.name, '한국분개장'))
+        파일들 = [f for f in 파일들 if f not in _kr패키지 and f not in _kr분개장]
+    _us원장 = [f for f in 파일들 or [] if _US원장인가(f.getvalue())]
+    _us패키지 = [f for f in 파일들 or [] if _KR패키지인가(f.getvalue()) and not 한국법인자료(f.getvalue(), f.name)]
+    if _us원장 and _us패키지:          # CTKonnect 원장 + 연결패키지를 함께 → 새 패키지 (2026-11-03)
+        US올린것처리(_us패키지 + _us원장)
+        for f in _us패키지:
+            목록.append((f.name, '실적'))
+        for f in _us원장:
+            목록.append((f.name, '원장반영'))
+        파일들 = [f for f in 파일들 if f not in _us원장 and f not in _us패키지]
     for f in 파일들 or []:
         바이트 = f.getvalue()
         종 = 자료종류(바이트)
@@ -8687,8 +8788,31 @@ else:
     st.stop()
 
 법인 = 'CTKonnect'
+if 메뉴 == 'CTKonnect':              # 2026-11-03 : 퀵북 원장 · 연결패키지를 함께 올리는 칸
+    with st.expander('CTKonnect 자료 올리기 — 퀵북 원장 · 연결패키지 (함께 올려도 됩니다)', expanded=False):
+        _uss = st.file_uploader('퀵북 원장(General Ledger) · CTKonnect 연결패키지 (.xlsx · 여러 개 가능)', type=['xlsx'],
+                                accept_multiple_files=True, key='us_files')
+        st.caption('원장 + 연결패키지 → 그 패키지 양식으로 원장을 반영 · 연결패키지만 → 그대로 · 원장만 → 지금 쓰는 패키지 양식으로 반영 '
+                   '(환율 · 통장 대사가 필요하면 「실적보고 엑셀작성」 을 쓰세요)')
+        if _uss:
+            US올린것처리(_uss)
+    _안 = st.session_state.get('_US올림안내')
+    if _안:
+        (st.success if _안[0] else st.warning)(_안[1])
+    if os.path.exists(CACHE_PATH):
+        with open(CACHE_PATH, 'rb') as _f:
+            데이터바이트 = _f.read()
+        쓰는파일 = 쓰던파일이름() or 쓰는파일
 if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — 같은 화면을 씨티케이커넥트 연결패키지(KRW)로 그립니다
     법인 = '씨티케이커넥트'
+    with st.expander('씨티케이커넥트 자료 올리기 — 더존 분개장 · 연결패키지 (함께 올려도 됩니다)', expanded=not _KR패키지바이트(분개장보기=False)[0]):
+        _krs = st.file_uploader('더존 분개장 · 씨티케이커넥트 연결패키지 (.xlsx · 여러 개 가능)', type=['xlsx'],
+                                accept_multiple_files=True, key='kr_files')
+        st.caption('분개장 + 연결패키지 → 그 패키지 양식으로 분개장을 반영 · 연결패키지만 → 그대로 · 분개장만 → 지금 쓰는 패키지 양식으로 반영')
+        _krs_도장 = tuple(sorted((f.name, int(getattr(f, 'size', 0) or 0)) for f in (_krs or [])))
+        if _krs and st.session_state.get('_kr_files_도장') != _krs_도장:
+            KR올린것처리(_krs)
+            st.session_state['_kr_files_도장'] = _krs_도장
     _kb, _kn = _KR패키지바이트()
     _안 = st.session_state.get('_KR올림안내')
     if _안:
@@ -8699,10 +8823,10 @@ if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — �
   <div class="card" style="max-width:820px; margin-top:8px">
     <div style="font-size:15px; line-height:1.85; color:{T['ink2']}">
       씨티케이커넥트(한국 법인) 연결패키지가 아직 없습니다.<br>
-      아래 상자에 <b style="color:{T['ink']}">「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」</b> 를 올려 주세요.
-      한 번 올린 뒤에는 <b style="color:{T['ink']}">더존 분개장</b>만 올려도 그 패키지 양식으로 바꿔 보여 드립니다.
+      위 「씨티케이커넥트 자료 올리기」 에 <b style="color:{T['ink']}">더존 분개장</b>과
+      <b style="color:{T['ink']}">「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」</b> 를 함께 올려 주세요.
+      한 번 올린 뒤에는 분개장만 올려도 그 패키지 양식으로 바꿔 보여 드립니다.
       PC 에서는 자료실 달 폴더의 「씨티케이커넥트」 하위 폴더에 넣어 두면 자동으로 읽습니다.</div></div></div>""")
-        st.file_uploader('씨티케이커넥트 연결패키지 또는 더존 분개장 (.xlsx)', type=['xlsx'], key='kr_pkg')
         st.stop()
     데이터바이트, 쓰는파일 = _kb, _kn
     설정칸.caption(f'📁 씨티케이커넥트 자료: {_kn}')
