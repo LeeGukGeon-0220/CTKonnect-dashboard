@@ -6686,10 +6686,14 @@ def 음수표기(글자):
     return s
 
 
+금액나눔 = 1          # 씨티케이커넥트 화면은 1,000 (천원) — 아래 표시나눔 줄에서 바꿈 (2026-11-03)
+
+
 def 금액(v, 자릿수=0, 괄호=True):
     """괄호=False 면 캡션처럼 HTML 을 못 쓰는 곳에서 쓸 수 있게 그냥 글자만 돌려줍니다."""
     if v is None or pd.isna(v):
         return '-'
+    v = v / 금액나눔
     if abs(v) < 0.5 / (10 ** 자릿수):        # 반올림하면 0 이 되는 금액은 '-' 로
         return '-'
     t = f'{v:,.{자릿수}f}'
@@ -9167,7 +9171,7 @@ SRED = SRED월별(당해원장)
 if 메뉴 in ('월간실적', 'CTKonnect', '씨티케이커넥트') and not 입력값['단일'] and not 입력값['서술']:
     설정칸.caption('ℹ️ 연결패키지에 「월간보고_입력」 시트가 없어 목표·진척률·코멘트는 비어 있습니다.')
 배율 = 1.0
-표시나눔 = 1          # CTKonnect : 금액을 천 단위(K)가 아니라 USD 그대로 보여 줍니다 (2026-10-29)
+금액나눔 = 표시나눔 = 1000 if 법인 == '씨티케이커넥트' else 1      # CTKonnect : USD 그대로 (2026-10-29) · 씨티케이커넥트 : 천원 (2026-11-03)
 
 
 def 상품채권html(원장, 기준일):
@@ -9295,10 +9299,10 @@ def 대출금html(원장, 보고월, 전년=None, 기초보정=None, 한도보�
                  f'<td>{구분}</td><td>{금액(r["Credit"] if 구분 == "차입" else -r["Debit"])}</td>'
                  f'<td class="lft" style="font-weight:400;background:transparent">{_html.escape(str(r["Description"] or ""))}</td></tr>')
     return f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>대출금 내역 <span class="unitbadge">단위 {통화}</span></h3>
+      <div class="card"><h3>대출금 내역 <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">원장 차입금 계정 · 1~{보고월}월 · 잔액 = 기초 + 차입 − 상환 · 남은 한도 = 한도 − 잔액 · 한도는 담당자 확인 값 · 이자 = 원장 이자비용(대출처별)</div>
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed;">
-          <colgroup>{'<col style="width:13%"><col style="width:7%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:7%"><col style="width:11%"><col style="width:16%">' if 통화 == 'KRW' else '<col style="width:16%"><col style="width:9.5%"><col style="width:9%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:8%"><col style="width:19.5%">'}</colgroup>
+          <colgroup>{'<col style="width:13%"><col style="width:6%"><col style="width:10.5%"><col style="width:10.5%"><col style="width:10.5%"><col style="width:10.5%"><col style="width:9%"><col style="width:12%"><col style="width:18%">' if 통화 == 'KRW' else '<col style="width:16%"><col style="width:9.5%"><col style="width:9%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:8%"><col style="width:19.5%">'}</colgroup>
           <thead><tr><th>대출처</th><th>한도</th><th>기초 (25년 말)</th><th>차입</th><th>상환</th><th>{보고월}월 말 잔액</th>
             <th>남은 한도</th><th>이자 (1~{보고월}월)</th><th>비고</th></tr></thead>
           <tbody>{요약}</tbody></table></div>
@@ -9313,7 +9317,7 @@ def C(v, 자릿수=0, 괄호=True):
     """표시 통화로 바꾼 금액 문자열. 음수는 (괄호) 빨간 글씨."""
     if v is None or pd.isna(v):
         return '-'
-    t = f'{v * 배율:,.{자릿수}f}'
+    t = f'{v * 배율 / 표시나눔:,.{자릿수}f}'
     return 음수표기(t) if 괄호 else t
 
 
@@ -9332,7 +9336,7 @@ def K(v):
     return None if v is None or pd.isna(v) else v * 배율 / 표시나눔
 
 
-단위K = (f'K {통화}' if 표시나눔 == 1000 else 통화)
+단위K = ('천원' if 통화 == 'KRW' and 표시나눔 == 1000 else (f'K {통화}' if 표시나눔 == 1000 else 통화))
 환율문구 = '' if 환율 == 1.0 else f' · 환율 1 USD = {환율:.4f} {통화}'
 
 
@@ -9420,7 +9424,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     with 제목칸:
         st.html(f"""<div class="wrap" translate="no" style="margin-bottom:0">
       <div class="page-head"><span class="t">실적보고 — {법인}</span>
-        <span class="pill">{당해연도}년 1~{보고월}월 누적{' · 단위 원' if 통화 == 'KRW' else ''}</span></div>
+        <span class="pill">{당해연도}년 1~{보고월}월 누적{' · 단위 천원' if 통화 == 'KRW' else ''}</span></div>
     </div>""")
 
     이전월 = 보고월 - 1 if 보고월 > 1 else None
@@ -9834,7 +9838,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
 
     def CK1(v):
         """계산 근거는 덧셈·뺄셈 식이라 괄호 대신 부호를 두고 색만 붉게 씁니다."""
-        t = f'{v * 배율 / 표시나눔:,.{1 if 표시나눔 > 1 else 0}f}'
+        t = f'{v * 배율 / 표시나눔:,.{1 if 표시나눔 > 1 and 통화 != "KRW" else 0}f}'
         return f'<span class="neg">{t}</span>' if t[:1] in ('-', '−') else t
 
     # 영업외손익이 무엇으로 이루어져 있는지 — 이자가 영업적자보다 큰 달이 있어 따로 적습니다
@@ -10088,7 +10092,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 f'"기타관리경비"로 집계되고 있습니다.</div>')
 
     상단html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="note">모든 금액은 {'천 단위 ' if 표시나눔 == 1000 else ''}{단위K} 로 표시했습니다 · 원장에서 직접 계산한 실제 수치입니다{환율문구}</div>
+      <div class="note">모든 금액은 {'' if 통화 == 'KRW' else ('천 단위 ' if 표시나눔 == 1000 else '')}{단위K} 로 표시했습니다{' (천원 미만 반올림 · 월별 매출 추이 그래프만 백만원)' if 통화 == 'KRW' else ''} · 원장에서 직접 계산한 실제 수치입니다{환율문구}</div>
       {경고}
       {kpi}
       <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:14px;">
@@ -10131,7 +10135,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                                  help=f'고른 항목의 {연도X}년 1~{보고월X}월 누적 금액을 거래처별로 보여줍니다')
     손익조건, 손익부호 = 항목조건_손익(손익골라본)
     손익세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {통화}</span></h3>
+      <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">{연도X}년 1~{보고월X}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
         {세부패널(누적IS[손익조건], '금액', 손익부호)}</div></div>"""
     손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (연결패키지 요약보고 4번 표)'
@@ -10399,7 +10403,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         else:
             자금대상 = None
         자금세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>{자금골라본} <span class="unitbadge">단위 {통화}</span></h3>
+      <div class="card"><h3>{자금골라본} <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">1~{보고월}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
         {세부패널(자금대상, '영향', 1)}</div></div>"""
         자금칸, 자금세부칸 = st.columns([2, 1], gap='small')
