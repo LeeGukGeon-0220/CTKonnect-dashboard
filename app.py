@@ -2008,7 +2008,7 @@ def 자금변동(df, 매핑=None):
     o['순증감'] = o['영업'] + o['투자'] + o['재무'] + o['FX']
     t = pd.DataFrame(o).T
     t.columns = 월들
-    return t, 상대[['구분', '영향', '월', 'Name', '계정과목']]
+    return t, 상대[['구분', '영향', '월', 'Name', '계정과목', 'Description']]
 
 
 
@@ -10019,19 +10019,49 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                              + ('-' if abs(v * 배율 / 표시나눔) < 0.5 else CK(v)) + '</td>'
                              for i, v in enumerate([sum(값들)] + 값들 + [sum(값들) / max(len(months), 1)]))
                 return f'<tr{cls}><td class="name">{이름}</td>{칸}</tr>'
-            _행 = (_줄('입금 (채권 · 기타)', 입금L, 중간=True)
-                   + _줄('변동비', 변동L, 중간=True)
+            _행 = (_줄('입금 (채권 · 기타)', 입금L, True)
+                   + _줄('변동비', 변동L, True)
                    + _줄('매입대금 (매입 · 선급금 등)', 변매L, 깊이=1)
                    + _줄('판매 · 물류비 (운반 · 수수료 등)', 변판L, 깊이=1)
-                   + _줄('고정비', 고정L, 중간=True)
+                   + _줄('고정비', 고정L, True)
                    + _줄('급여 · 인건비', 고급L, 깊이=1)
                    + _줄('기타 (임차 · 수수료 · 이자 등)', 고기L, 깊이=1)
-                   + _줄('영업 현금 순증감 (= 위 표 「영업활동」)', 순L, True))
-            _너비 = 자금이름비율 * 2.6 + 자금숫자비율 * (len(months) + 2)
-            _콜 = (f'<colgroup><col style="width:{자금이름비율 * 2.6 / _너비 * 100:.4f}%">'
+                   + _줄('영업 현금 순증감', 순L, True))
+            _너비 = 자금이름비율 * 2.05 + 자금숫자비율 * (len(months) + 2)
+            _단위줄 = (f'<div style="width:{_너비:.3f}%; min-width:{자금최소폭 * _너비 / 100:.0f}px; text-align:right; '
+                       f'font-size:12px; font-weight:700; color:{T["ink3"]}; margin:6px 0 4px">단위 {단위K}</div>')
+            # 항목별 큰 금액 2곳 + 기타 (거래처 · 주된 계정과목)
+            def _이름(n):
+                n = re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n or '')).strip()
+                return n or '(거래처 없음)'
+            _상['거래처2'] = _상['거래처'].map(_이름)
+            _큰행 = ''
+            for _키, _제목 in (('입금', '입금'), ('변동-매입', '매입대금'), ('변동-판매', '판매 · 물류비'),
+                               ('고정-급여', '급여 · 인건비'), ('고정-기타', '기타 고정비')):
+                _x = _상[_상['나눔'].eq(_키)]
+                if _x.empty or abs(float(_x['영향'].sum())) < 0.5:
+                    continue
+                _합 = _x.groupby('거래처2')['영향'].sum()
+                _위 = list(_합.abs().sort_values(ascending=False).index[:2])
+                _큰행 += _줄(_제목, [float(_x[_x['월'].eq(m)]['영향'].sum()) for m in months], True)
+                for _n in _위:
+                    _y = _x[_x['거래처2'].eq(_n)]
+                    _과 = _y.groupby('과목')['영향'].sum().abs().idxmax()
+                    _적 = ''
+                    if 'Description' in _y.columns:
+                        _큰 = _y.loc[_y['영향'].abs().idxmax(), 'Description']
+                        _적 = re.sub(r'\s+', ' ', str(_큰 if pd.notna(_큰) else '')).strip()
+                    _과 = (_적[:22] + ('…' if len(_적) > 22 else '')) if _적 and _적.lower() != 'nan' else _과
+                    _큰행 += _줄(f'{_html.escape(_n)} · {_html.escape(_과)}',
+                                 [float(_y[_y['월'].eq(m)]['영향'].sum()) for m in months], 깊이=1)
+                _나 = _x[~_x['거래처2'].isin(_위)]
+                if len(_나) and abs(float(_나['영향'].sum())) >= 0.5:
+                    _큰행 += _줄(f'기타 {_나["거래처2"].nunique()}곳',
+                                 [float(_나[_나['월'].eq(m)]['영향'].sum()) for m in months], 깊이=1)
+            _콜 = (f'<colgroup><col style="width:{자금이름비율 * 2.05 / _너비 * 100:.4f}%">'
                    + f'<col style="width:{자금숫자비율 / _너비 * 100:.4f}%">' * (len(months) + 2) + '</colgroup>')
             고변html = (
-                f'<h3 style="margin-top:18px">입금 · 변동비 · 고정비 <span class="unitbadge">단위 {단위K}</span></h3>'
+                f'<h3 style="margin-top:18px">입금 · 변동비 · 고정비</h3>'
                 f'<div class="sub">위 「영업활동」 을 다시 나눈 표 · 실적(1~{보고월}월)만 · '
                 + ('<b>합계가 위 영업활동과 같습니다</b>' if 맞음 else
                    f'<span style="color:{T["warn"]};font-weight:700">⚠ 위 영업활동과 다른 달이 있습니다 — 확인 필요</span>')
@@ -10041,18 +10071,19 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 + (f' · {보고월}월 말 현금 {CK(말현금)} 이면 <b>매출이 없어도 고정비만으로 약 {버팀:,.1f}개월</b>'
                    if 버팀 is not None and 말현금 > 0 else '')
                 + '</div>'
-                f'<div class="scrollx"><table class="lined cfcomp cfsplit" style="width:{_너비:.3f}%; min-width:{자금최소폭 * _너비 / 100:.0f}px; table-layout:fixed;">{_콜}'
+                + _단위줄
+                + f'<div class="scrollx"><table class="lined cfcomp cfsplit" style="width:{_너비:.3f}%; min-width:{자금최소폭 * _너비 / 100:.0f}px; table-layout:fixed;">{_콜}'
                 f'<thead><tr><th>구분</th><th class="cum">실적 누적<br><span class="fcs">1~{보고월}월</span></th>'
                 + ''.join(f'<th>{m}월</th>' for m in months)
                 + f'<th>월평균</th></tr></thead><tbody>{_행}</tbody></table></div>'
-                f'<details class="calcnote fold" style="margin-top:8px"><summary><b>어떻게 나눴나 · 쓰는 법</b> '
-                f'<span class="muted">(누르면 펼쳐집니다)</span></summary><div class="assume" style="color:{T["ink2"]}">'
-                f'<ul><li><b>변동비</b> = 매출에 따라 늘고 주는 돈 — 매입대금(매입채무 · 선급금 지급, 그리고 매입처에 낸 미지급금) · '
-                f'운반비 · 판매수수료 · 외주용역(물류) · 수출제비용 · 광고 · 판촉</li>'
-                f'<li><b>고정비</b> = 매출이 없어도 매달 나가는 돈 — 급여 · 4대보험 · 퇴직연금, 임차료 · 보험 · 통신 · 자문 · 지급수수료 · 이자 등 나머지</li>'
-                f'<li>나눈 기준은 원장의 <b>상대 계정과목</b>과 거래처입니다 (가정 없음). 계정이 바뀌거나 새 거래처가 생기면 자동으로 다시 나뉩니다.</li>'
-                f'<li><b>보는 법</b> : 고정비 월평균이 「매달 줄어드는 돈의 바닥」입니다. 입금 − 변동비(= 공헌 현금)가 고정비보다 커야 현금이 늘어납니다. '
-                f'현금 ÷ 고정비 월평균 = 매출이 끊겨도 버틸 수 있는 개월 수(대략)입니다.</li></ul></div></details>')
+                f'<details class="calcnote fold" style="margin-top:8px"><summary><b>항목별 큰 금액</b> '
+                f'<span class="muted">(2곳 + 기타 · 누르면 펼쳐집니다)</span></summary>'
+                + _단위줄
+                + f'<div class="scrollx" style="margin-top:2px"><table class="lined cfcomp cfsplit" style="width:{_너비:.3f}%; '
+                f'min-width:{자금최소폭 * _너비 / 100:.0f}px; table-layout:fixed;">{_콜}'
+                f'<thead><tr><th>거래처 · 내용</th><th class="cum">실적 누적<br><span class="fcs">1~{보고월}월</span></th>'
+                + ''.join(f'<th>{m}월</th>' for m in months)
+                + f'<th>월평균</th></tr></thead><tbody>{_큰행}</tbody></table></div></details>')
 
         # ── 월말 잔액 꺾은선 : 아래 표의 월 칸 한가운데에 점이 오도록 %로 자리를 잡습니다
         #    (그림 영역도 표의 「1월~마지막 달」 칸과 정확히 같은 자리에 둡니다)
@@ -10200,8 +10231,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap .cfcard .cfsum {{ font-size:clamp(13px, 0.8cqw, 15px); }}
           .wrap table.cfcomp td.name {{ white-space:nowrap; padding-left:6px !important; }}
           .wrap table.cfcomp tr.sub td.name {{ padding-left:clamp(20px, 1.6cqw, 30px) !important; }}
-          .wrap table.cfsplit tr.mid td, .wrap table.cfsplit tr.sub td.cum {{ font-weight:400; }}
-          .wrap table.cfsplit tr.mid td {{ color:{T['ink']}; }}
+
           .wrap table.cfcomp td.cum {{ background:{T['navysoft']}; font-weight:700; }}
           .wrap table.cfcomp th.cum {{ background:{T['navy7']}; }}
           .wrap .cfsum {{ font-size:13px; color:{T['ink2']}; margin:4px 0 8px; }}
