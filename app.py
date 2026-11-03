@@ -7196,7 +7196,42 @@ def _보관설정(열쇠):
         return ''
 
 
-def 보관소에저장(바이트, 파일이름):
+보관KR파일 = 보관폴더 + '/최신_씨티케이커넥트.xlsx'
+보관KR이름표 = 보관폴더 + '/최신_씨티케이커넥트_이름.txt'
+
+
+def 보관소에서받기():
+    """웹 서버가 새로 켜져 자료가 비었으면 GitHub 자료 저장소에서 두 법인 마지막 파일을 내려받습니다."""
+    import urllib.request as _UR
+    토큰, 저장소 = _보관설정('github_token'), _보관설정('github_repo')
+    if not 토큰 or not 저장소:
+        return
+    def _받기(길):
+        요청 = _UR.Request('https://api.github.com/repos/%s/contents/%s' % (저장소, 길),
+                           headers={'Authorization': 'Bearer ' + 토큰, 'Accept': 'application/vnd.github.raw',
+                                    'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'ctk-dashboard'})
+        with _UR.urlopen(요청, timeout=120) as 답:
+            return 답.read()
+    if not os.path.exists(보관용량자리):
+        보관용량확인()
+    for 파일, 이름표, 둘곳, 둘이름 in ((보관파일, 보관이름표, CACHE_PATH, 이름기록),
+                                       (보관KR파일, 보관KR이름표, '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt')):
+        if os.path.exists(둘곳):
+            continue
+        try:
+            값 = _받기(파일)
+            with open(둘곳, 'wb') as f:
+                f.write(값)
+            try:
+                with open(둘이름, 'wb') as f:
+                    f.write(_받기(이름표))
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+
+def 보관소에저장(바이트, 파일이름, 법인자리='US'):
     """실적 엑셀을 GitHub 비공개 저장소에 넣습니다. 설정이 없으면 아무 일도 안 합니다."""
     import base64
     import json as _json
@@ -7235,14 +7270,68 @@ def 보관소에저장(바이트, 파일이름):
             몸['sha'] = 옛것[길]
         _부르기('contents/' + 길, 몸, 'PUT')
 
-    _올리기(보관파일, 바이트, '실적자료 갱신 — ' + 파일이름)
-    _올리기(보관이름표, 파일이름.encode('utf-8'), '실적자료 이름 갱신')
-    try:                                   # 누가 · 언제 올렸는지도 함께
-        with open(저장소기록자리, 'rb') as _f:
-            _올리기(저장소기록자리, _f.read(), '실적자료 기록 갱신')
+    # 이번에 바꿀 파일들
+    새것 = {}
+    if 법인자리 == 'KR':      # 씨티케이커넥트 연결패키지
+        새것[보관KR파일] = 바이트
+        새것[보관KR이름표] = 파일이름.encode('utf-8')
+    else:
+        새것[보관파일] = 바이트
+        새것[보관이름표] = 파일이름.encode('utf-8')
+        try:                                   # 누가 · 언제 올렸는지도 함께
+            with open(저장소기록자리, 'rb') as _f:
+                새것[저장소기록자리] = _f.read()
+        except Exception:
+            pass
+
+    # ① 과거 기록 없이 「지금 파일만 든 커밋」 하나로 바꿔 끼웁니다 (사용자 요청 : 과거자료는 지워도 됨 · 2026-11-03)
+    try:
+        가지 = _부르기('git/ref/heads/main')
+        지금커밋 = _부르기('git/commits/' + 가지['object']['sha'])
+        새트리 = [{'path': 길, 'mode': '100644', 'type': 'blob',
+                   'sha': _부르기('git/blobs', {'content': base64.b64encode(값).decode('ascii'),
+                                                'encoding': 'base64'}, 'POST')['sha']}
+                  for 길, 값 in 새것.items()]
+        트리 = _부르기('git/trees', {'base_tree': 지금커밋['tree']['sha'], 'tree': 새트리}, 'POST')
+        커밋 = _부르기('git/commits', {'message': '최신 자료 — ' + 파일이름, 'tree': 트리['sha'], 'parents': []}, 'POST')
+        _부르기('git/refs/heads/main', {'sha': 커밋['sha'], 'force': True}, 'PATCH')
     except Exception:
-        pass
+        # ② 저장소가 아직 비어 있는 등 ① 이 안 되면 예전 방식(파일마다 덮어쓰기)으로
+        for 길, 값 in 새것.items():
+            _올리기(길, 값, '자료 갱신 — ' + 파일이름)
+    보관용량확인()
     return True
+
+
+보관용량자리 = '최근보관용량.txt'
+보관용량경고MB = 800          # GitHub 권장 1GB — 그 전에 알림
+
+
+def 보관용량확인():
+    """자료 저장소 용량(MB)을 GitHub 에 물어 적어 둡니다 — 사이드바 알림용."""
+    import json as _json
+    import urllib.request as _UR
+    토큰, 저장소 = _보관설정('github_token'), _보관설정('github_repo')
+    if not 토큰 or not 저장소:
+        return None
+    try:
+        요청 = _UR.Request('https://api.github.com/repos/%s' % 저장소,
+                           headers={'Authorization': 'Bearer ' + 토큰, 'Accept': 'application/vnd.github+json',
+                                    'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'ctk-dashboard'})
+        with _UR.urlopen(요청, timeout=30) as 답:
+            MB = float(_json.loads(답.read().decode('utf-8')).get('size', 0)) / 1024
+        with open(보관용량자리, 'w', encoding='utf-8') as f:
+            f.write(f'{MB:.1f}')
+        return MB
+    except Exception:
+        return None
+
+
+def 보관용량():
+    try:
+        return float(open(보관용량자리, encoding='utf-8').read().strip())
+    except Exception:
+        return None
 
 
 def 보관해두기(바이트, 파일이름):
@@ -7324,6 +7413,13 @@ def 자료기록쓰기(이름, 누가):
     return 쪽지
 
 
+# 웹 서버가 새로 켜졌으면 GitHub 자료 저장소에서 두 법인 마지막 파일을 먼저 내려받습니다 (2026-11-03)
+if not 자료있음 or not os.path.exists('최근업로드_KR.xlsx'):
+    try:
+        보관소에서받기()
+    except Exception:
+        pass
+    자료있음 = os.path.exists(CACHE_PATH)
 # 서버가 다시 켜져 캐시가 비었어도, 보관해 둔 자료로 바로 화면을 그립니다
 if not 자료있음 and os.path.exists(보관파일):
     try:
@@ -7483,10 +7579,31 @@ def 한국법인자료(바이트, 이름=''):
     return False
 
 
+def KR보관하기(바이트, 이름):
+    """씨티케이커넥트 패키지를 이 서버와 GitHub 자료 저장소에 남깁니다 (같은 파일이면 한 번만)."""
+    도장 = (str(이름), len(바이트))
+    if st.session_state.get('_KR보관도장') == 도장:
+        return
+    st.session_state['_KR보관도장'] = 도장
+    try:
+        with open(KR보관, 'wb') as _f:
+            _f.write(바이트)
+        with open(KR이름표, 'w', encoding='utf-8') as _f:
+            _f.write(str(이름))
+    except OSError:
+        pass
+    try:
+        with st.spinner('씨티케이커넥트 자료를 보관소에 저장하고 있습니다 — 잠시만요'):
+            보관소에저장(바이트, str(이름), 'KR')
+    except Exception:
+        pass
+
+
 def _KR패키지바이트():
     """씨티케이커넥트 연결패키지 → (바이트, 파일 이름). 방금 올린 것 → 자료실 가장 새 파일 → 마지막 보관 순."""
     _up = st.session_state.get('kr_pkg')
     if _up is not None:
+        KR보관하기(_up.getvalue(), _up.name)
         return _up.getvalue(), _up.name
     후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
             if '씨티케이커넥트' in os.path.basename(f) and '연결패키지' in os.path.basename(f)
@@ -7522,13 +7639,7 @@ def 자료받기(파일들):
         종 = 자료종류(바이트)
         if 종 == '실적' and 한국법인자료(바이트, f.name):      # 2026-11-03 : 씨티케이커넥트 패키지는 KR 자리에
             종 = '한국실적'
-            try:
-                with open(KR보관, 'wb') as _f:
-                    _f.write(바이트)
-                with open(KR이름표, 'w', encoding='utf-8') as _f:
-                    _f.write(f.name)
-            except OSError:
-                pass
+            KR보관하기(바이트, f.name)
         elif 종 == '실적':
             실적 = f
             _자리에쓰기(전월보관, 바이트, f.name)
@@ -7550,6 +7661,10 @@ def 쓰던파일이름():
 
 # 설정은 평소엔 접어 두고, 필요할 때만 펴서 씁니다 (사이드바를 깔끔하게).
 # ※ 올려 둔 원장이 없으면(웹사이트가 다시 켜지면 지워집니다) 저절로 펼쳐서 바로 올릴 수 있게 합니다.
+_용량 = 보관용량()
+if _용량 is not None and _용량 >= 보관용량경고MB:
+    st.sidebar.warning(f'자료 저장소(GitHub)가 {_용량:,.0f}MB 입니다 — 권장 1GB 에 가깝습니다. '
+                       '클로드에게 「자료 저장소 정리」 를 요청해 주세요.')
 설정칸 = st.sidebar.expander('⚙  설정 · 파일 업로드', expanded=not 자료있음)
 설정칸.caption('화면 밝기')
 설정칸.radio('화면 밝기', ['밝은 화면', '어두운 화면'], horizontal=True,
