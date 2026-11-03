@@ -477,7 +477,7 @@ h1, h2, h3, h4 {{ color: {T['headink']} !important; font-weight: 800 !important;
   .wrap table.mtab {{ border-collapse:separate; border-spacing:0; font-size:12.5px;
       width:100%; }}
   .wrap table.mtab th {{ position:sticky; top:0; z-index:3; background:{T['navy']};
-      color:#FFFFFF; font-weight:700; padding:7px 7px; text-align:right;
+      color:#FFFFFF; font-weight:700; padding:7px 7px; text-align:center;
       white-space:nowrap; }}
   .wrap table.mtab td {{ padding:6px 7px; text-align:right; white-space:nowrap;
       color:{T['ink2']}; border-top:1px solid {T['line']}; }}
@@ -9546,6 +9546,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     #    st.html 은 <svg> 를 지우므로 그림(data URI)으로 넣습니다
     def _선그래프():
         import base64 as _b64
+        _백만 = 법인 == '씨티케이커넥트'
+        CK = (lambda v, 괄호=True: '-' if v is None or pd.isna(v) else
+              음수표기(f'{v / 1_000_000:,.0f}')) if _백만 else globals()['CK']
         W, H, 위, 아래, 왼, 오른 = 1000, 175, 30, 36, 20, 170   # 높이 30% 줄임 (250 → 175, 2026-10-29)
         폭 = W - 왼 - 오른
         n = max(len(months), 1)
@@ -10089,7 +10092,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       {경고}
       {kpi}
       <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:14px;">
-        <div class="card"><h3>월별 매출 추이 <span class="unitbadge">단위 {단위K}</span></h3>
+        <div class="card"><h3>월별 매출 추이 <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
           <div class="sub">{(f'1~{보고월}월 · 맨 오른쪽 <b>1~{보고월}월 누적</b> {CK(누적26)} <span class="muted">(누적 막대 높이는 월별과 다른 기준)</span>') if 전년없음 else
             (f'1~{보고월}월 · {전년연도}년 동월 비교 &nbsp;|&nbsp; 맨 오른쪽 <b>1~{보고월}월 누적</b> = {전년연도}년 {CK(누적25)} ↔ {당해연도}년 {CK(누적26)}'
              '<span class="muted">(같은 기간끼리 견줍니다 · 누적 막대 높이는 월별과 다른 기준)</span>')}</div>
