@@ -577,7 +577,7 @@ h1, h2, h3, h4 {{ color: {T['headink']} !important; font-weight: 800 !important;
   .wrap .cashline .cdot.first {{ background:{T['panel']};
       box-shadow:0 0 0 2px {T['accent']}; }}
   .wrap .cashline .cval {{ position:absolute; transform:translate(-50%,-100%);
-      font-size:11px; font-weight:800; color:{T['ink']}; white-space:nowrap;
+      font-size:10px; font-weight:800; color:{T['ink']}; white-space:nowrap;
       font-variant-numeric:tabular-nums; }}
   .wrap .cashline .ctag {{ position:absolute; transform:translate(-50%,0);
       margin-top:9px; font-size:11.5px; font-weight:700; color:{T['ink3']};
@@ -9938,14 +9938,14 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         ]
         # 칸을 좁혀 한 화면에 — 구분 · 실적 누적 · 실적 달 · 예상 달 (2026-11-03)
         자금칸수 = 1 + len(months) + len(자금예상월)
-        자금이름칸, 자금숫자칸 = 118, (64 if 통화 == 'KRW' else 70)
+        자금이름칸, 자금숫자칸 = 86, 58
         자금표너비 = 자금이름칸 + 자금숫자칸 * 자금칸수
         자금이름비율 = 자금이름칸 / 자금표너비 * 100
         자금숫자비율 = (100 - 자금이름비율) / 자금칸수
         자금콜그룹 = (f'<colgroup><col style="width:{자금이름비율:.4f}%">'
                       + f'<col style="width:{자금숫자비율:.4f}%">' * 자금칸수 + '</colgroup>')
-        자금표스타일 = (f'class="lined cfcomp" style="width:100%; min-width:{자금표너비 * 0.92:.0f}px; '
-                        f'max-width:{자금표너비}px; table-layout:fixed;"')
+        자금표스타일 = 'class="lined cfcomp" style="width:100%; table-layout:fixed;"'
+        자금최소폭 = 자금표너비              # 이보다 좁으면 그림과 표를 같이 옆으로 밀어 봅니다
 
         자금rows = ''
         for 국문, 깊이, 값들, 굵게 in 자금줄:
@@ -10040,7 +10040,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                   f'{CK(기말[-1])} {단위K}'
                   + (f' → {달표(자금예상월[-1])} 말 (예상) {CK(예상기말[-1])} {단위K}' if 예상기말 else '')
                   + '</span></div>'
-                  f'<div class="cashline" style="max-width:{자금표너비}px">'
+                  f'<div class="cashline">'
                   f'{눈금}{축}{구간}{표시}</div>')
 
         예상글 = (f'{달표(자금예상월[0])} ~ {달표(자금예상월[-1])}' if 자금예상월 else '')
@@ -10093,7 +10093,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <div class="sub">기초 현금에서 출발해 월별로 무엇 때문에
           늘고 줄었는지 나눴습니다 · 「실적 누적」 = 1~{보고월}월 실제 합계 (기초 · 기말은 1월 초 · {보고월}월 말 잔액){예상안내}</div>
         <style>
-          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:11.5px; padding-left:2px; padding-right:4px; }}
+          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:10.5px; padding-left:1px !important; padding-right:3px !important;
+              letter-spacing:-0.2px; }}
+          .wrap table.cfcomp thead th {{ font-size:10.5px; }}
           .wrap table.cfcomp td.name {{ white-space:nowrap; }}
           .wrap table.cfcomp th .fcs {{ font-size:9.5px; }}
           .wrap table.cfcomp td.cum {{ background:{T['navysoft']}; font-weight:700; }}
@@ -10101,13 +10103,14 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap table.cfcomp td:last-child {{ font-weight:400; color:{T['ink2']}; }}
           .wrap table.cfcomp tr.total td:last-child {{ font-weight:800; color:{T['ink']}; filter:none; }}
         </style>
+        <div class="scrollx"><div style="min-width:{자금최소폭}px">
         {꺾은선}
-        <div class="scrollx"><table {자금표스타일}>{자금콜그룹}<thead><tr><th>구분</th>
+        <table {자금표스타일}>{자금콜그룹}<thead><tr><th>구분</th>
         <th class="cum">실적 누적<br><span class="fcs">1~{보고월}월</span></th>
         {''.join(f'<th>{m}월</th>' for m in months)}
         {''.join(f'<th class="fc">{달이름(m)}<br><span class="fcs">{"예상" if m <= 12 else f"{(당해연도 + 1) % 100}년 예상"}</span></th>' for m in 자금예상월)}
         </tr></thead>
-        <tbody>{자금rows}</tbody></table></div>
+        <tbody>{자금rows}</tbody></table></div></div>
         {가정html}</div></div>"""
 
     경고 = ''
@@ -10413,8 +10416,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     # ── 현금흐름 (왼쪽 3) + 항목별 거래처 세부내역 (오른쪽 1) ────────────
     if 자금표 is not None:
         누적자금상세 = 자금상세[자금상세['월'].le(보고월)] if 자금상세 is not None else None
-        st.html(자금html)                                   # 현금흐름은 가로 전체 (예상이 다음 해 6월까지라 칸이 많음)
-        _, 자금선택칸 = st.columns([2, 1], gap='small')     # 카드 제목 줄을 맞추려고 선택상자만 따로
+        _, 자금선택칸 = st.columns([3, 1], gap='small')     # 카드 제목 줄을 맞추려고 선택상자만 따로
         with 자금선택칸:
             자금골라본 = st.selectbox('현금흐름 항목', [n for n, _, _ in 현금흐름목록], key='dash_cf_drill',
                                     help=f'고른 항목의 1~{보고월}월 누적 금액을 거래처별로 보여줍니다')
@@ -10431,8 +10433,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="card"><h3>{자금골라본} <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">1~{보고월}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
         {세부패널(자금대상, '영향', 1)}</div></div>"""
-        자금칸, 자금세부칸 = st.columns([2, 1], gap='small')
+        자금칸, 자금세부칸 = st.columns([3, 1], gap='small')
         with 자금칸:
+            st.html(자금html)
             대출금옵션 = {}
             if 법인 == '씨티케이커넥트':          # 기초 = 26년 BS기초(25년 말 재무상태표)의 차입금 · 한도 없음
                 try:
