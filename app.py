@@ -10013,19 +10013,19 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             말현금 = 기말[-1] if 기말 else 기초현금
             버팀 = (말현금 / 월평균고정) if 월평균고정 > 0.5 else None
 
-            def _줄(이름, 값들, 굵게=False, 깊이=0):
-                cls = ' class="total"' if 굵게 else (' class="sub"' if 깊이 else '')
+            def _줄(이름, 값들, 굵게=False, 깊이=0, 중간=False):
+                cls = ' class="total"' if 굵게 else (' class="sub"' if 깊이 else (' class="mid"' if 중간 else ''))
                 칸 = ''.join('<td' + (' class="cum"' if i == 0 else '') + '>'
                              + ('-' if abs(v * 배율 / 표시나눔) < 0.5 else CK(v)) + '</td>'
                              for i, v in enumerate([sum(값들)] + 값들 + [sum(값들) / max(len(months), 1)]))
                 return f'<tr{cls}><td class="name">{이름}</td>{칸}</tr>'
-            _행 = (_줄('입금 (매출채권 회수 · 기타입금)', 입금L, True)
-                   + _줄('변동비 출금 — 매출 따라 늘고 주는 돈', 변동L, True)
-                   + _줄('매입대금 (매입채무 · 선급금 · 매입처 미지급금)', 변매L, 깊이=1)
-                   + _줄('판매 · 물류비 (운반 · 판매수수료 · 외주 · 광고 등)', 변판L, 깊이=1)
-                   + _줄('고정비 출금 — 매출 없어도 매달 나가는 돈', 고정L, True)
+            _행 = (_줄('입금 (채권 · 기타)', 입금L, 중간=True)
+                   + _줄('변동비', 변동L, 중간=True)
+                   + _줄('매입대금 (매입 · 선급금 등)', 변매L, 깊이=1)
+                   + _줄('판매 · 물류비 (운반 · 수수료 등)', 변판L, 깊이=1)
+                   + _줄('고정비', 고정L, 중간=True)
                    + _줄('급여 · 인건비', 고급L, 깊이=1)
-                   + _줄('그 밖의 고정비 (임차 · 보험 · 통신 · 자문 · 수수료 · 이자 등)', 고기L, 깊이=1)
+                   + _줄('기타 (임차 · 수수료 · 이자 등)', 고기L, 깊이=1)
                    + _줄('영업 현금 순증감 (= 위 표 「영업활동」)', 순L, True))
             _너비 = 자금이름비율 * 2.6 + 자금숫자비율 * (len(months) + 2)
             _콜 = (f'<colgroup><col style="width:{자금이름비율 * 2.6 / _너비 * 100:.4f}%">'
@@ -10198,7 +10198,10 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap .cfcard .cashline .cval {{ font-size:clamp(10px, 0.7cqw, 14px); }}
           .wrap .cfcard .cashline .cylab, .wrap .cfcard .cashline .ctag {{ font-size:clamp(11px, 0.68cqw, 13.5px); }}
           .wrap .cfcard .cfsum {{ font-size:clamp(13px, 0.8cqw, 15px); }}
-          .wrap table.cfcomp td.name {{ white-space:nowrap; }}
+          .wrap table.cfcomp td.name {{ white-space:nowrap; padding-left:6px !important; }}
+          .wrap table.cfcomp tr.sub td.name {{ padding-left:clamp(20px, 1.6cqw, 30px) !important; }}
+          .wrap table.cfsplit tr.mid td, .wrap table.cfsplit tr.sub td.cum {{ font-weight:400; }}
+          .wrap table.cfsplit tr.mid td {{ color:{T['ink']}; }}
           .wrap table.cfcomp td.cum {{ background:{T['navysoft']}; font-weight:700; }}
           .wrap table.cfcomp th.cum {{ background:{T['navy7']}; }}
           .wrap .cfsum {{ font-size:13px; color:{T['ink2']}; margin:4px 0 8px; }}
