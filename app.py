@@ -645,7 +645,7 @@ st.markdown(카드스타일, unsafe_allow_html=True)   # 카드 스타일은 여
 CARD_CSS = ''  # (아래 f-string 들과의 호환을 위해 빈 값으로 둡니다)
 
 매출계정 = ['제품매출', '기타매출', '용역수익', '상품매출', '용역매출']
-매출원가계정 = ['제품매출원가', '상품매출원가']
+매출원가계정 = ['제품매출원가', '상품매출원가', '용역매출원가', '패키지매출원가', '기타매출원가']   # 2026-11-03 : 씨티케이커넥트 용역매출원가
 영업외계정 = ['이자비용', '이자수익', '잡손실', '잡이익', '외환차손익', '외화환산손익', '세금환급', '수수료수익']
 판관비항목 = ['인건비성 항목', '커미션 비용', '외부용역', '건물관리비', '차량유지비', 'ICT',
              '출장비', '운반 및 창고료', '소모성경비', '기타관리경비']   # CTKonnect : 상각비 없음 (2026-10-29)
@@ -4466,9 +4466,12 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
     # ── 지금 시트에서 구역 찾기
     def 찾기(앞):
         return next((r for r in range(1, ws.max_row + 1) if str(ws.cell(r, 2).value or '').startswith(앞)), None)
-    s1, s2, s3 = 찾기('1. 매출채권'), 찾기('2. 미청구'), 찾기('3. 채무')
+    s1 = next((r for r in range(1, ws.max_row + 1) if re.match(r'^1[.\-]', str(ws.cell(r, 2).value or '').strip())), None)
+    s2 = next((r for r in range(1, ws.max_row + 1) if re.match(r'^2\.', str(ws.cell(r, 2).value or '').strip())
+               and any(k in str(ws.cell(r, 2).value) for k in ('미청구', '선급금'))), None)
+    s3 = 찾기('3. 채무')
     if not (s1 and s2 and s3):
-        return ['채권채무 시트의 구역(1. 매출채권 · 2. 미청구 · 3. 채무)을 찾지 못해 그대로 두었습니다.']
+        return ['채권채무 시트의 구역(1. 매출채권 · 2. 선급금(미청구) · 3. 채무)을 찾지 못해 그대로 두었습니다.']
 
     def 합계줄(시작):
         return next(r for r in range(시작 + 2, ws.max_row + 1) if str(ws.cell(r, 2).value or '').strip() == '합계')
@@ -4496,22 +4499,42 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
         return None
     def _수(v):
         return round(float(v), 2) if isinstance(v, (int, float)) else 0.0
-    이전비고 = {}
-    for r in range(s1 + 1, s2):
+    이전비고, 지금제목 = {}, ''
+    for r in range(s1, s2):
         v = 줄[r]['값']
+        if isinstance(v.get(2), str) and re.match(r'^\d', v.get(2).strip()):
+            지금제목 = v.get(2)
+            continue
         d_ = _날(v.get(2))
-        if d_ is not None and v.get(10):
+        if d_ is None or not v.get(10):
+            continue
+        if '기준일' in 지금제목:
+            이전비고[('요약', '선수금' if '선수금' in 지금제목 else '매출채권', 커_이름정리(v.get(3)).upper())] = v.get(10)
+        else:
             이전비고[(d_, _수(v.get(6)), _수(v.get(7)))] = v.get(10)
+    이전선급 = {}
+    for r in range(s2 + 2, s3):
+        v = 줄[r]['값']
+        if v.get(2) and _날(v.get(4)) is not None and v.get(8):
+            이전선급[(커_이름정리(v.get(2)).upper(), _날(v.get(4)), round(_수(v.get(5)), 0))] = v.get(8)
     # 4. 팩토링 건별 원장(③)에서 건 번호 찾기 : (일자, 금액) → 'D1-1 · 브랜드'
     건이름, 건번호 = {}, {}
     for r, x in 줄.items():
         v = x['값']
         if re.fullmatch(r'D\d+', str(v.get(2) or '')) and v.get(3) and not isinstance(v.get(3), (datetime.datetime, datetime.date)):
             건이름[str(v[2])] = str(v[3])
+    열매출, 열회수 = 9, 10            # 건별 원장 머리 줄에서 「매출 · 회수」 칸 찾기 (사용자가 칸을 지우면 위치가 바뀜)
+    for r, x in 줄.items():
+        v = x['값']
+        if str(v.get(2) or '').strip() == '건' and str(v.get(4) or '').strip() == '구분':
+            for c, val in v.items():
+                if str(val or '').strip() == '매출': 열매출 = c
+                if str(val or '').strip() == '회수': 열회수 = c
+            break
     for r, x in 줄.items():
         v = x['값']
         if v.get(4) in ('매출', '회수') and re.match(r'D\d+', str(v.get(2) or '')) and _날(v.get(3)) is not None:
-            금 = v.get(9) if v.get(4) == '매출' else v.get(10)
+            금 = v.get(열매출) if v.get(4) == '매출' else v.get(열회수)
             if isinstance(금, (int, float)):
                 기본 = re.match(r'D\d+', str(v[2])).group(0)
                 건번호[(_날(v.get(3)), round(float(금), 0))] = f'{v[2]} · {건이름.get(기본, "")}'.rstrip(' ·')
@@ -4637,176 +4660,514 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
     순서 = {'미지급금': 0, '단기차입금': 1}
     행3.sort(key=lambda d: (순서.get(d['계정'], 2), -d['잔액']))
 
-    # ── 시트 다시 쓰기
-    for rng in list(ws.merged_cells.ranges):
-        ws.unmerge_cells(str(rng))
-    ws.delete_rows(1, ws.max_row + 5)
+    새모양 = any(re.match(r'^1-\d+\.', str(줄[r]['값'].get(13) or '').strip()) for r in range(s1, s2))
+    if 새모양:
+        # ══ 사용자가 다듬은 모양(왼쪽 집계 · 선급금 · 채무 / 오른쪽 팩토링 세부 원장)을 칸 · 줄 모양 그대로 다시 씀 (2026-11-02)
+        최대 = max(줄)
+        def _글(r, c):
+            return str(줄[r]['값'].get(c) or '').strip() if r in 줄 else ''
+        def _표(r제목, 열):
+            """제목 줄에서 표 범위 : 머리 · 본문 줄들 · 합계 · 메모."""
+            t = {'제목': r제목, '머리': r제목 + 1, '본문': [], '합계': None, '메모': None, '글': _글(r제목, 열)}
+            r = r제목 + 2
+            while r <= 최대 and 줄[r]['값'].get(열) is not None and _글(r, 열) != '합계' \
+                    and not _글(r, 열).startswith('※') and not (isinstance(줄[r]['값'].get(열), str) and re.match(r'^\d(-\d+)*\.', _글(r, 열))):
+                t['본문'].append(r)
+                r += 1
+            if r <= 최대 and _글(r, 열) == '합계':
+                t['합계'] = r
+                r += 1
+            if r <= 최대 and _글(r, 열).startswith('※'):
+                t['메모'] = r
+                r += 1
+            t['끝'] = r - 1
+            return t
+        왼, 오 = [], []
+        for r in range(s1, 최대 + 1):
+            if re.match(r'^\d(-\d+)*\.', _글(r, 2)) and _글(r + 1, 2) in ('일자', '지급일', '거래처'):
+                왼.append(_표(r, 2))
+            if re.match(r'^\d(-\d+)*\.', _글(r, 13)) and _글(r + 1, 13) == '일자':
+                오.append(_표(r, 13))
+        def _종류(t):
+            g_ = t['글']
+            if re.match(r'^1\.', g_): return '요약AR'
+            if re.match(r'^1-1\.', g_): return '요약선수'
+            if re.match(r'^1-\d+-1\.', g_): return '세부선수'
+            if re.match(r'^2\.', g_): return '선급'
+            if re.match(r'^3\.', g_): return '채무'
+            return '기타'
+        틀 = {}
+        for t in 왼:
+            틀.setdefault(_종류(t), t)
+        왼끝 = max([t['끝'] for t in 왼] + [s1])
+        꼬리시작 = 왼끝 + 1                      # 그 아래(건별 원장 등)는 그대로 옮김
+        def _간격(t, 다음):
+            return max(다음['제목'] - t['끝'] - 1, 0) if 다음 else 2
+        간 = {}
+        for i, t in enumerate(왼):
+            간.setdefault(_종류(t), _간격(t, 왼[i + 1] if i + 1 < len(왼) else None))
+        오간 = _간격(오[0], 오[1]) if len(오) > 1 else 1
+        날짜글 = lambda s: re.sub(r'기준일 : \d{4}\.\d{2}\.\d{2}', f'기준일 : {끝날:%Y.%m.%d}',
+                             re.sub(r'기간 : \d{4}\.\d{2}\.\d{2} ~ \d{4}\.\d{2}\.\d{2}', f'기간 : {끝날.year}.01.01 ~ {끝날:%Y.%m.%d}', s))
 
-    새 = [1]
-    def 놓기(s, 값=None, 원행=None):
-        r = 새[0]
-        for c, st in s['모양'].items():
-            _커_입히기(ws.cell(r, c), st)
-        원 = 원행 or s['원행']
-        for c, v in s['값'].items():
-            if 값 is not None and c in 값:
-                continue
-            ws.cell(r, c, _커_옮김(v, 원, r, openpyxl.utils.get_column_letter(c)))
-        for c, v in (값 or {}).items():
-            ws.cell(r, c, v)
-        for a, b in s['병합']:
-            ws.merge_cells(start_row=r, start_column=a, end_row=r, end_column=b)
-        if s['높이']:
-            ws.row_dimensions[r].height = s['높이']
-        새[0] += 1
-        return r
+        # 선급금 열린 금액 (원장 선급금 계정 · 지급처별로 먼저 지급한 것부터 청구 · 대체 금액을 지움)
+        선급계정 = [a for a in g['계정'].unique() if 한글(a) == '선급금'] or [a for a in g['계정'].unique() if a.startswith('11801')]
+        sx = g[g['계정'].isin(선급계정) & (g['일자'] <= 끝날)].copy()
+        sx['이름'] = sx['거래처원'].fillna('(거래처 표시 없음)').map(커_이름정리)
+        sx = sx.sort_values(['일자', 'TID'], kind='stable')
+        열린, 남은대 = [], []
+        for 이름, x in sx.groupby('이름', sort=False):
+            큐 = [{'이름': 이름, '일자': y['일자'], '적요': y['적요'], '지급': float(y['차']), '청구': 0.0}
+                  for _, y in x[x['차'] > 0].iterrows()]
+            돈 = float(x['대'].sum())
+            for q in 큐:
+                뺄 = min(돈, q['지급']); q['청구'] += 뺄; 돈 -= 뺄
+            if 돈 > 0.005:
+                끝줄 = x[x['대'] > 0].iloc[-1]
+                남은대.append({'이름': 이름, '일자': 끝줄['일자'], '적요': 끝줄['적요'], '금액': 돈})
+            열린 += 큐
+        for z in 남은대:
+            짝 = sx[(sx['차'] - z['금액']).abs() < 0.01]
+            if len(짝):
+                for q in [q for q in 열린 if q['이름'] == 짝['이름'].iloc[0]]:
+                    뺄 = min(z['금액'], q['지급'] - q['청구']); q['청구'] += 뺄; z['금액'] -= 뺄
+                    if z['금액'] <= 0.005:
+                        break
+        선급행 = [q for q in 열린 if q['지급'] - q['청구'] > 0.005] + \
+                 [{'이름': z['이름'], '일자': z['일자'], '적요': z['적요'], '지급': 0.0, '청구': z['금액'], '음': True}
+                  for z in 남은대 if z['금액'] > 0.005]
+        선급잔 = float(sx['차'].sum() - sx['대'].sum())
+        # ① 집계 자료
+        요약 = []
+        for (이름, 종류), x in 전체.groupby(['이름', '종류'], sort=False):
+            전 = x[x['일자'] <= 끝날]
+            차, 대 = float(전['차'].sum()), float(전['대'].sum())
+            if abs(차) >= 0.005 or abs(대) >= 0.005:
+                요약.append({'거래처': 이름, '종류': 종류, '차': 차, '대': 대, '팩': 이름 in 팩토링이름})
+        요약.sort(key=lambda d: (0 if d['팩'] else 1, _순서(d['거래처']) if d['팩'] else (0, ''),
+                                -((d['차'] - d['대']) if d['종류'] == '매출채권' else (d['대'] - d['차'])), d['거래처']))
+        세부번호 = {n: f'1-{i + 2}' for i, n in enumerate(팩토링이름)}
 
-    def 범위고침(r, 원a, 원b, 새a, 새b):
-        for c in range(1, 최대열 + 1):
-            v = ws.cell(r, c).value
-            if isinstance(v, str) and v.startswith('='):
-                ws.cell(r, c).value = re.sub(rf'(\$?[A-Z]+\$?){원a}:(\$?[A-Z]+\$?){원b}\b',
-                                             rf'\g<1>{새a}:\g<2>{새b}', v)
+        # ── 시트 비우고 다시 쓰기
+        for rng in list(ws.merged_cells.ranges):
+            ws.unmerge_cells(str(rng))
+        ws.delete_rows(1, ws.max_row + 5)
+        def 복사(원, 새r, c1, c2, 값=None, 높이=True):
+            s_ = 줄[원]
+            for c in range(c1, c2 + 1):
+                if c in s_['모양']:
+                    _커_입히기(ws.cell(새r, c), s_['모양'][c])
+                if 값 is not None and c in 값:
+                    ws.cell(새r, c).value = 값[c]
+                else:
+                    ws.cell(새r, c).value = _커_옮김(s_['값'].get(c), 원, 새r, openpyxl.utils.get_column_letter(c))
+            for a, b in s_['병합']:
+                if a >= c1 and b <= c2:
+                    ws.merge_cells(start_row=새r, start_column=a, end_row=새r, end_column=b)
+            if 높이 and s_['높이']:
+                ws.row_dimensions[새r].height = s_['높이']
+        for r in range(1, s1):                       # 머리 (제목 · 팩토링 표시 · 오른쪽 위 메모)
+            복사(r, r, 1, 최대열)
+        L = lambda c: openpyxl.utils.get_column_letter(c)
+        def 표쓰기(t, 시작, 행들, 열, 범위, 키함수, 값함수, 합계식=None, 제목글=None, 메모글=None, 높이=True):
+            """t 견본 표를 시작 줄부터 다시 씀 — 같은 키의 이전 줄이 있으면 그 줄 모양 · 글을 그대로 씀."""
+            c1, c2 = 범위
+            r = 시작
+            복사(t['제목'], r, c1, c2, {열: 제목글 if 제목글 else 날짜글(t['글'])}, 높이); r += 1
+            복사(t['머리'], r, c1, c2, None, 높이); r += 1
+            이전 = {}
+            for rr in t['본문']:
+                k = 키함수(줄[rr]['값'], True)
+                if k is not None:
+                    이전.setdefault(k, rr)
+            첫 = r
+            본1 = t['본문'][0] if t['본문'] else t['머리']
+            본끝 = t['본문'][-1] if t['본문'] else 본1
+            for i, d in enumerate(행들):
+                k = 키함수(d, False)
+                원 = 이전.get(k)
+                마지막 = i == len(행들) - 1
+                견 = 원 or (본끝 if (마지막 and t['합계'] is None) else 본1)
+                v = 값함수(d, r, r == 첫, 줄[원]['값'] if 원 else None)
+                복사(견, r, c1, c2, v, 높이)
+                if 마지막 and t['합계'] is None and 원 and 원 != 본끝:      # 표 끝줄 아래 선은 견본 끝줄 것
+                    for c in range(c1, c2 + 1):
+                        b_ = copy.copy(ws.cell(r, c).border); e_ = 줄[본끝]['모양'].get(c)
+                        if e_:
+                            ws.cell(r, c).border = openpyxl.styles.Border(left=b_.left, right=b_.right, top=b_.top, bottom=copy.copy(e_[2].bottom))
+                r += 1
+            끝 = r - 1
+            if t['합계'] is not None:
+                복사(t['합계'], r, c1, c2, {c: f'=SUM({L(c)}{첫}:{L(c)}{끝})' for c in (합계식 or [])}, 높이); r += 1
+            if t['메모'] is not None:
+                복사(t['메모'], r, c1, c2, {열: 메모글} if 메모글 else None, 높이); r += 1
+            return r - 1
+        def _k날(v):
+            return _날(v) if not isinstance(v, pd.Timestamp) else v.normalize()
 
-    # 모양 견본 — ② 표(달마다 그대로인 표)의 머리 · 본문 · 합계 줄에서 가져옴
-    t2 = next(r for r in range(s2 + 2, max(줄) + 1) if str(줄[r]['값'].get(2) or '').strip() == '합계')
-    견머리, 견본, 견합 = 줄[s2 + 1]['모양'], 줄[s2 + 2]['모양'], 줄[t2]['모양']
-    빨강 = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True, color='FFC00000')
-    옅음 = openpyxl.styles.PatternFill('solid', fgColor='FFF2F2F2')
-
-    # 1~머리줄
-    for r in range(1, s1):
-        놓기(줄[r])
-
-    def 칸(r, c, v=None, 모양=None, 형식=None, 굵게=False, 글=None):
-        m = 모양 or 견본
-        _커_입히기(ws.cell(r, c), m.get(5) if 형식 else m.get(2))     # 모든 칸 같은 모양 (글자칸 = B열 견본, 숫자칸 = E열 견본)
-        if v is not None:
-            ws.cell(r, c).value = v
-        if 형식:
-            ws.cell(r, c).number_format = 형식
-        if 굵게 or 글:
-            ws.cell(r, c).font = 글 or openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True)
-    숫형 = '#,##0;\\(#,##0\\);"-"'
-    def 줄쓰기(값들, 모양, 합칠=(), 숫자칸=(), 왼칸=(), 굵게=False):
-        r = 새[0]
-        for c in range(2, 16):
-            칸(r, c, 값들.get(c), 모양, 숫형 if c in 숫자칸 else None, 굵게)
-            ws.cell(r, c).alignment = openpyxl.styles.Alignment(
-                horizontal='right' if c in 숫자칸 else ('left' if c in 왼칸 else 'center'), vertical='center')
-        for a, b in 합칠:
-            ws.merge_cells(start_row=r, start_column=a, end_row=r, end_column=b)
-        새[0] += 1
-        return r
-    def 제목(글, 굵게=True):
-        r = 새[0]
-        ws.cell(r, 2).value = 글
-        ws.cell(r, 2).font = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=굵게)
-        새[0] += 1
-        return r
-
-    제목(f'1. 매출채권 · 선수금 — 팩토링 거래처는 원장처럼 건별 (발생 · 회수), 그 외 거래처는 집계')
-    팩토링잔 = {'매출채권': 0.0, '선수금': 0.0}
-    머리1 = {2: '일자', 3: '거래처', 4: '적요', 6: '차변', 7: '대변', 9: '잔액', 10: '비고'}
-    합1 = ((4, 5), (7, 8), (10, 15))
-    for i, 이름 in enumerate(팩토링이름, 1):
-        새[0] += 1
-        제목(f'1-{i}. 팩토링 — {이름} : 매출채권 · 선수금 원장 ({md(끝날)} 결산)')
-        줄쓰기(머리1, 견머리, 합1)
-        for (n, 종류, 전, 뒤) in [t for t in 원장1 if t[0] == 이름]:
-            r = 줄쓰기({2: f'계정명 : {종류}'}, 견본, ((2, 15),), 왼칸=(2,), 굵게=True)
-            for c in range(2, 16):
-                ws.cell(r, c).fill = 옅음
-            첫 = 새[0]
-            if not len(전):
-                줄쓰기({3: n, 4: '해당 거래 없음', 6: 0, 7: 0, 9: 0}, 견본, 합1, (6, 7, 9), (3, 4, 10))
+        # 왼쪽
+        r = s1
+        def 다음(r, 종류):
+            return r + 1 + 간.get(종류, 2)
+        if '요약AR' in 틀:
+            행 = [d for d in 요약 if d['종류'] == '매출채권']
+            끝r = 표쓰기(틀['요약AR'], r, 행, 2, (1, 11),
+                        lambda v, 옛: (커_이름정리(v.get(3)).upper() if 옛 else v['거래처'].upper()),
+                        lambda d, rr, 첫, 옛: {2: pd.Timestamp(끝날).to_pydatetime(), 3: d['거래처'], 4: f'1~{끝날.month}월 누적',
+                                              6: round(d['차'], 2) or None, 7: round(d['대'], 2) or None, 8: f'=F{rr}-G{rr}',
+                                              9: (옛.get(9) if 옛 and 옛.get(9) else (f'팩토링 — 세부 {세부번호[d["거래처"]]} 참조' if d['팩'] else None))},
+                        합계식=(6, 7, 8))
+            r = 다음(끝r, '요약AR')
+        행 = [d for d in 요약 if d['종류'] == '선수금']
+        if '요약선수' in 틀 and 행:
+            끝r = 표쓰기(틀['요약선수'], r, 행, 2, (1, 11),
+                        lambda v, 옛: (커_이름정리(v.get(3)).upper() if 옛 else v['거래처'].upper()),
+                        lambda d, rr, 첫, 옛: {2: pd.Timestamp(끝날).to_pydatetime(), 3: d['거래처'], 4: f'1~{끝날.month}월 누적',
+                                              6: round(d['차'], 2) or None, 7: round(d['대'], 2) or None, 8: f'=G{rr}-F{rr}',
+                                              9: (옛.get(9) if 옛 and 옛.get(9) else (f'팩토링 — 세부 {세부번호[d["거래처"]]} 참조' if d['팩'] else None))},
+                        합계식=(6, 7, 8))
+            r = 다음(끝r, '요약선수')
+        def 원장값(n, 수익쪽, 열들):
+            """원장 줄 값 — 열들 = (일자, 거래처, 적요, 차, 대, 잔, 비고) 칸 번호."""
+            cD, cN, cJ, cDr, cCr, cB, cR = 열들
+            def f(d, rr, 첫, 옛):
+                if d.get('뒤'):
+                    식 = f'={L(cB)}{rr - 1}-{L(cCr)}{rr}' if not 첫 else f'=-{L(cCr)}{rr}'
+                    return {cD: pd.Timestamp(d['일자']).to_pydatetime(), cN: n, cJ: (옛.get(cJ) if 옛 else f'(결산 후) {d["적요"]}'),
+                            cDr: None, cCr: round(d['대'], 2), cB: 식, cR: (옛.get(cR) if 옛 and 옛.get(cR) else d['비고'])}
+                if 수익쪽:
+                    식 = f'={L(cCr)}{rr}-{L(cDr)}{rr}' if 첫 else f'={L(cB)}{rr - 1}+{L(cCr)}{rr}-{L(cDr)}{rr}'
+                else:
+                    식 = f'={L(cDr)}{rr}-{L(cCr)}{rr}' if 첫 else f'={L(cB)}{rr - 1}+{L(cDr)}{rr}-{L(cCr)}{rr}'
+                return {cD: pd.Timestamp(d['일자']).to_pydatetime(), cN: n, cJ: (옛.get(cJ) if 옛 and 옛.get(cJ) else (d['적요'] or None)),
+                        cDr: round(d['차'], 2) or None, cCr: round(d['대'], 2) or None, cB: 식,
+                        cR: (옛.get(cR) if 옛 and 옛.get(cR) else d['비고'])}
+            return f
+        def 원장행(n, 전, 뒤):
+            행 = []
             for _, y in 전.iterrows():
                 키 = (pd.Timestamp(y['일자']).normalize(), round(float(y['차']), 2), round(float(y['대']), 2))
-                비 = 이전비고.get(키)
-                if not 비:
-                    건 = 건번호.get((키[0], round(max(float(y['차']), float(y['대'])), 0)))
-                    비 = ' · '.join(x for x in (건, f'TID {_커_번호(y["TID"])}') if x)
-                    for k in 커_팩토링거래처:       # 적요는 다른 팩토링 거래처인데 퀵북 거래처가 이 거래처인 줄
-                        if k.upper() in str(y['적요']).upper() and k.upper() not in n.upper():
-                            비 += f' · 적요는 {k} 인데 퀵북 거래처가 {n} — 확인 필요'
+                건 = 건번호.get((키[0], round(max(float(y['차']), float(y['대'])), 0)))
+                비 = ' · '.join(x for x in (건, f'TID {_커_번호(y["TID"])}') if x)
+                for k in 커_팩토링거래처:
+                    if k.upper() in str(y['적요']).upper() and k.upper() not in n.upper():
+                        비 += f' · 적요는 {k} 인데 퀵북 거래처가 {n} — 확인 필요'
+                행.append({'일자': y['일자'], '적요': y['적요'], '차': float(y['차']), '대': float(y['대']), '비고': 비})
+            for (d_, 적, 금, 근) in sorted(뒤, key=lambda t: t[0]):
+                행.append({'일자': d_, '적요': 적, '차': 0.0, '대': 금, '비고': 근, '뒤': True})
+            return 행
+        def 원장키(열들):
+            cD, cN, cJ, cDr, cCr, cB, cR = 열들
+            def f(v, 옛):
+                if 옛:
+                    d_ = _날(v.get(cD))
+                    return None if d_ is None else (d_, round(_수(v.get(cDr)), 2), round(_수(v.get(cCr)), 2))
+                return (pd.Timestamp(v['일자']).normalize(), round(v['차'], 2), round(v['대'], 2))
+            return f
+        왼열 = (2, 3, 4, 6, 7, 8, 9)
+        if '세부선수' in 틀 or '요약선수' in 틀:
+            견선 = 틀.get('세부선수') or 틀.get('요약선수')
+            for n in 팩토링이름:
+                for (n2, 종류, 전, 뒤) in 원장1:
+                    if n2 != n or 종류 != '선수금' or not len(전):
+                        continue
+                    끝r = 표쓰기(견선, r, 원장행(n, 전, []), 2, (1, 11), 원장키(왼열), 원장값(n, True, 왼열),
+                                제목글=f'{세부번호[n]}-1. {n} 선수금 (기간 : {끝날.year}.01.01 ~ {끝날:%Y.%m.%d})')
+                    r = 다음(끝r, '세부선수')
+        if '선급' in 틀:
+            선열 = (2, 3, 4, 6, 7, 8, 9)       # 지급일 · 지급처 · 내용 · 지급액 · 청구액 · 미청구 · 비고
+            def 선키(v, 옛):
+                if 옛:
+                    d_ = _날(v.get(2))
+                    return None if d_ is None else (커_이름정리(v.get(3)).upper(), d_, round(_수(v.get(6)), 0))
+                return (v['이름'].upper(), pd.Timestamp(v['일자']).normalize(), round(v['지급'], 0))
+            def 선값(q, rr, 첫, 옛):
+                비 = 옛.get(9) if 옛 and 옛.get(9) else ('지급 없이 대체된 금액 — 확인 필요' if q.get('음') else None)
+                return {2: pd.Timestamp(q['일자']).to_pydatetime(), 3: q['이름'], 4: q['적요'] or None,
+                        6: round(q['지급'], 2), 7: round(q['청구'], 2), 8: f'=F{rr}-G{rr}', 9: 비}
+            끝r = 표쓰기(틀['선급'], r, 선급행, 2, (1, 11), 선키, 선값, 합계식=(6, 7, 8),
+                        메모글=f'※ 합계 {선급잔:,.0f} = BS 선급금 ({md(끝날)} 원장) · 지급처별로 먼저 지급한 것부터 청구 · 대체 금액을 지움')
+            r = 다음(끝r, '선급')
+        if '채무' in 틀:
+            def 채키(v, 옛):
+                if 옛:
+                    return (str(v.get(2) or '').upper(), str(v.get(3) or ''))
+                return (str(v['거래처']).upper(), v['계정'])
+            def 채값(d, rr, 첫, 옛):
+                return {2: d['거래처'], 3: d['계정'], 5: round(d['잔액'], 2), 6: round(d['지급'], 2), 7: f'=E{rr}-F{rr}',
+                        8: (옛.get(8) if 옛 and 옛.get(8) else d.get('비고'))}
+            끝r = 표쓰기(틀['채무'], r, 행3, 2, (1, 11), 채키, 채값, 합계식=(5, 6, 7),
+                        메모글=(f'※ {md(다음날)} 이후 지급 = 원장({md(원장끝)}까지) 차변'
+                               + (f' + 통장({md(통장끝)}까지) 출금' if 통장끝 is not None else '') + ' · 결산월 말 잔액을 넘는 지급은 넣지 않았습니다.'))
+            r = 끝r
+        왼새끝 = r
+        # 오른쪽 — 팩토링 매출채권 세부 원장
+        r = s1
+        오열 = (13, 14, 15, 17, 18, 19, 20)
+        for n in 팩토링이름:
+            견 = next((t for t in 오 if n.upper() in t['글'].upper()), 오[0])
+            for (n2, 종류, 전, 뒤) in 원장1:
+                if n2 != n or 종류 != '매출채권' or (not len(전) and not 뒤):
+                    continue
+                끝r = 표쓰기(견, r, 원장행(n, 전, 뒤), 13, (12, 최대열), 원장키(오열), 원장값(n, False, 오열),
+                            제목글=f'{세부번호[n]}. {n} 매출채권 (기간 : {끝날.year}.01.01 ~ {끝날:%Y.%m.%d})', 높이=False)
+                r = 끝r + 1 + 오간
+        오새끝 = r
+        # 꼬리 (건별 원장 등) — 왼쪽 · 오른쪽 중 더 긴 쪽 아래로, 원래 간격 그대로
+        꼬리새 = max(왼새끝 + (꼬리시작 - 왼끝), 오새끝 + 1)
+        for rr in range(꼬리시작, 최대 + 1):
+            복사(rr, 꼬리새 + (rr - 꼬리시작), 1, 최대열)
+        b3 = ws.max_row + 10
+    else:
+        # ── 시트 다시 쓰기
+        for rng in list(ws.merged_cells.ranges):
+            ws.unmerge_cells(str(rng))
+        ws.delete_rows(1, ws.max_row + 5)
+
+        새 = [1]
+        def 놓기(s, 값=None, 원행=None):
+            r = 새[0]
+            for c, st in s['모양'].items():
+                _커_입히기(ws.cell(r, c), st)
+            원 = 원행 or s['원행']
+            for c, v in s['값'].items():
+                if 값 is not None and c in 값:
+                    continue
+                ws.cell(r, c, _커_옮김(v, 원, r, openpyxl.utils.get_column_letter(c)))
+            for c, v in (값 or {}).items():
+                ws.cell(r, c, v)
+            for a, b in s['병합']:
+                ws.merge_cells(start_row=r, start_column=a, end_row=r, end_column=b)
+            if s['높이']:
+                ws.row_dimensions[r].height = s['높이']
+            새[0] += 1
+            return r
+
+        def 범위고침(r, 원a, 원b, 새a, 새b):
+            for c in range(1, 최대열 + 1):
+                v = ws.cell(r, c).value
+                if isinstance(v, str) and v.startswith('='):
+                    ws.cell(r, c).value = re.sub(rf'(\$?[A-Z]+\$?){원a}:(\$?[A-Z]+\$?){원b}\b',
+                                                 rf'\g<1>{새a}:\g<2>{새b}', v)
+
+        # 모양 견본 — ② 표(달마다 그대로인 표)의 머리 · 본문 · 합계 줄에서 가져옴
+        t2 = next(r for r in range(s2 + 2, max(줄) + 1) if str(줄[r]['값'].get(2) or '').strip() == '합계')
+        견머리, 견본, 견합 = 줄[s2 + 1]['모양'], 줄[s2 + 2]['모양'], 줄[t2]['모양']
+        # 사용자가 다듬어 둔 ① 원장 표(머리 「일자」 줄 · 본문 · 끝줄)가 있으면 그 줄 모양을 칸마다 그대로 씀
+        원머리 = next((r for r in range(s1, s2) if str(줄[r]['값'].get(2) or '').strip() == '일자'), None)
+        칸별 = False
+        if 원머리 and 원머리 + 1 < s2 and 줄[원머리 + 1]['값'].get(2) is not None:
+            원끝 = 원머리 + 1
+            while 원끝 + 1 < s2 and 줄[원끝 + 1]['값'].get(2) is not None and str(줄[원끝 + 1]['값'].get(2)).strip() != '일자':
+                원끝 += 1
+            견머리, 견본 = 줄[원머리]['모양'], 줄[원머리 + 1]['모양']
+            견끝 = 줄[원끝]['모양']
+            견합 = 견끝
+            칸별 = True
+        빨강 = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True, color='FFC00000')
+        옅음 = openpyxl.styles.PatternFill('solid', fgColor='FFF2F2F2')
+
+        # 1~머리줄
+        for r in range(1, s1):
+            놓기(줄[r])
+
+        def 칸(r, c, v=None, 모양=None, 형식=None, 굵게=False, 글=None):
+            m = 모양 or 견본
+            if 칸별:
+                _커_입히기(ws.cell(r, c), m.get(c))                        # 사용자 원장 표의 같은 칸 모양
+            else:
+                _커_입히기(ws.cell(r, c), m.get(5) if 형식 else m.get(2))     # 모든 칸 같은 모양 (글자칸 = B열 견본, 숫자칸 = E열 견본)
+            if v is not None:
+                ws.cell(r, c).value = v
+            if 형식:
+                ws.cell(r, c).number_format = 형식
+            if 굵게 or 글:
+                ws.cell(r, c).font = 글 or openpyxl.styles.Font(name='맑은 고딕', size=9, bold=True)
+        숫형 = '#,##0;\\(#,##0\\);"-"'
+        def 줄쓰기(값들, 모양, 합칠=(), 숫자칸=(), 왼칸=(), 굵게=False):
+            r = 새[0]
+            for c in range(2, 16):
+                칸(r, c, 값들.get(c), 모양, 숫형 if c in 숫자칸 else None, 굵게)
+                ws.cell(r, c).alignment = openpyxl.styles.Alignment(
+                    horizontal='right' if c in 숫자칸 else ('left' if c in 왼칸 else 'center'), vertical='center')
+            for a, b in 합칠:
+                ws.merge_cells(start_row=r, start_column=a, end_row=r, end_column=b)
+            새[0] += 1
+            return r
+        def 제목(글, 굵게=True):
+            r = 새[0]
+            ws.cell(r, 2).value = 글
+            ws.cell(r, 2).font = openpyxl.styles.Font(name='맑은 고딕', size=9, bold=굵게)
+            새[0] += 1
+            return r
+
+        def 표끝(r):
+            for c in range(2, 16):          # 표 끝줄 — 사용자 끝줄 모양의 테두리 (없으면 아래 가는 줄)
+                b_ = copy.copy(ws.cell(r, c).border)
+                아래 = (견끝.get(c)[2].bottom if 칸별 and 견끝.get(c) else None) or openpyxl.styles.Side(style='thin')
+                ws.cell(r, c).border = openpyxl.styles.Border(left=b_.left, right=b_.right, top=b_.top, bottom=copy.copy(아래))
+        머리1 = {2: '일자', 3: '거래처', 4: '적요', 6: '차변', 7: '대변', 9: '잔액', 10: '비고'}
+        합1 = ((4, 5), (7, 8), (10, 15))
+        기간 = f'기간 : {끝날.year}.01.01 ~ {끝날:%Y.%m.%d}'
+        def 제목합(글, 이름, 식):          # 제목 옆 합계 칸은 사용자가 지워서 제목만 씀 (2026-11-02)
+            return 제목(글)
+        # ① 집계 — 모든 거래처 (팩토링 거래처 먼저) · 일자 = 결산월 말일
+        요약 = []
+        for (이름, 종류), x in 전체.groupby(['이름', '종류'], sort=False):
+            전 = x[x['일자'] <= 끝날]
+            차, 대 = float(전['차'].sum()), float(전['대'].sum())
+            if abs(차) < 0.005 and abs(대) < 0.005:
+                continue
+            요약.append({'거래처': 이름, '종류': 종류, '차': 차, '대': 대, '잔': (차 - 대) if 종류 == '매출채권' else (대 - 차),
+                         '팩': 이름 in 팩토링이름})
+        요약.sort(key=lambda d: (0 if d['팩'] else 1, _순서(d['거래처']) if d['팩'] else (0, ''), -d['잔'], d['거래처']))
+        세부번호 = {}
+        번 = 2
+        for 이름 in 팩토링이름:
+            세부번호[이름] = f'1-{번}'
+            번 += 1
+        for 종류, 번호, 합이름 in (('매출채권', '1.', '미수채권'), ('선수금', '1-1.', '선수금')):
+            행 = [d for d in 요약 if d['종류'] == 종류]
+            if 종류 == '선수금' and not 행:
+                continue
+            r제목 = 제목합(f'{번호} {종류} (기준일 : {끝날:%Y.%m.%d})', 합이름, None)
+            줄쓰기(머리1, 견머리, 합1)
+            첫 = 새[0]
+            for d in 행:
                 r = 새[0]
-                잔식 = (f'=F{r}-G{r}' if r == 첫 else f'=I{r - 1}+F{r}-G{r}') if 종류 == '매출채권' else \
-                       (f'=G{r}-F{r}' if r == 첫 else f'=I{r - 1}+G{r}-F{r}')
-                줄쓰기({2: pd.Timestamp(y['일자']).to_pydatetime(), 3: n, 4: y['적요'] or None,
-                       6: round(float(y['차']), 2) or None, 7: round(float(y['대']), 2) or None, 9: 잔식, 10: 비},
+                비 = 이전비고.get(('요약', 종류, d['거래처'].upper()))
+                if not 비 and d['팩']:
+                    비 = f'팩토링 — 세부 {세부번호[d["거래처"]]} 참조'
+                줄쓰기({2: pd.Timestamp(끝날).to_pydatetime(), 3: d['거래처'], 4: f'1~{끝날.month}월 누적',
+                       6: round(d['차'], 2) or None, 7: round(d['대'], 2) or None,
+                       9: (f'=F{r}-G{r}' if 종류 == '매출채권' else f'=G{r}-F{r}'), 10: 비},
                       견본, 합1, (6, 7, 9), (3, 4, 10))
                 ws.cell(r, 2).number_format = 'yyyy-mm-dd'
             끝 = 새[0] - 1
-            잔 = float(전['차'].sum() - 전['대'].sum()) if 종류 == '매출채권' else float(전['대'].sum() - 전['차'].sum())
-            팩토링잔[종류] += 잔
-            r = 줄쓰기({2: f'{md(끝날)} 잔액', 6: f'=SUM(F{첫}:F{끝})', 7: f'=SUM(G{첫}:G{끝})'}, 견합, 합1, (6, 7, 9), 굵게=True)
-            ws.cell(r, 9).value = (f'=F{r}-G{r}' if 종류 == '매출채권' else f'=G{r}-F{r}')
-            ws.cell(r, 10).value = f'BS {종류} 중 {n} 몫'
-            ws.cell(r, 10).alignment = openpyxl.styles.Alignment(horizontal='left', vertical='center')
-            if 뒤:
-                잔행 = r
+            r = 줄쓰기({2: '합계', 6: f'=SUM(F{첫}:F{끝})', 7: f'=SUM(G{첫}:G{끝})', 9: f'=SUM(I{첫}:I{끝})'}, 견합, ((2, 5), (7, 8), (10, 15)), (6, 7, 9), 굵게=True)
+            표끝(r)
+            새[0] += 1
+        제목(f'※ 팩토링 거래처({", ".join(팩토링이름) or "없음"})는 아래에 건별 원장으로 세부 내역을 보여 줍니다 · '
+             f'세부 원장 아래 줄(결산 후)은 통장에 들어온 회수로, 장부에는 아직 반영 전입니다', 굵게=False)
+        # ① 세부 — 팩토링 거래처 원장 (원장처럼 발생 · 회수)
+        for 이름 in 팩토링이름:
+            for (n, 종류, 전, 뒤) in [t for t in 원장1 if t[0] == 이름]:
+                if not len(전) and not 뒤:
+                    continue
+                새[0] += 1
+                번호 = 세부번호[이름] + ('.' if 종류 == '매출채권' else '-1.')
+                r제목 = 제목합(f'{번호} {n} {종류} ({기간})', '미수채권' if 종류 == '매출채권' else '선수금', None)
+                줄쓰기(머리1, 견머리, 합1)
+                첫 = 새[0]
+                for _, y in 전.iterrows():
+                    키 = (pd.Timestamp(y['일자']).normalize(), round(float(y['차']), 2), round(float(y['대']), 2))
+                    비 = 이전비고.get(키)
+                    if not 비:
+                        건 = 건번호.get((키[0], round(max(float(y['차']), float(y['대'])), 0)))
+                        비 = ' · '.join(x for x in (건, f'TID {_커_번호(y["TID"])}') if x)
+                        for k in 커_팩토링거래처:       # 적요는 다른 팩토링 거래처인데 퀵북 거래처가 이 거래처인 줄
+                            if k.upper() in str(y['적요']).upper() and k.upper() not in n.upper():
+                                비 += f' · 적요는 {k} 인데 퀵북 거래처가 {n} — 확인 필요'
+                    r = 새[0]
+                    잔식 = (f'=F{r}-G{r}' if r == 첫 else f'=I{r - 1}+F{r}-G{r}') if 종류 == '매출채권' else \
+                           (f'=G{r}-F{r}' if r == 첫 else f'=I{r - 1}+G{r}-F{r}')
+                    줄쓰기({2: pd.Timestamp(y['일자']).to_pydatetime(), 3: n, 4: y['적요'] or None,
+                           6: round(float(y['차']), 2) or None, 7: round(float(y['대']), 2) or None, 9: 잔식, 10: 비},
+                          견본, 합1, (6, 7, 9), (3, 4, 10))
+                    ws.cell(r, 2).number_format = 'yyyy-mm-dd'
                 for (d_, 적, 금, 근) in sorted(뒤, key=lambda t: t[0]):
                     r = 새[0]
+                    키 = (pd.Timestamp(d_).normalize(), 0.0, round(금, 2))
+                    비 = 이전비고.get(키) or 근
                     줄쓰기({2: pd.Timestamp(d_).to_pydatetime(), 3: n, 4: f'(결산 후) {적}', 7: round(금, 2),
-                           9: f'=I{r - 1}-G{r}', 10: 근}, 견본, 합1, (6, 7, 9), (3, 4, 10))
+                           9: (f'=I{r - 1}-G{r}' if r > 첫 else f'=-G{r}'), 10: 비}, 견본, 합1, (6, 7, 9), (3, 4, 10))
                     ws.cell(r, 2).number_format = 'yyyy-mm-dd'
                     ws.cell(r, 10).font = 빨강
-                r = 줄쓰기({2: '결산 후 회수 반영 뒤 남은 금액', 9: f'=I{새[0] - 1}'}, 견합, ((2, 5), (7, 8), (10, 15)), (6, 7, 9), 굵게=True)
-                ws.cell(r, 2).alignment = openpyxl.styles.Alignment(horizontal='left', vertical='center')
-    # 그 외 거래처 집계
-    새[0] += 1
-    제목(f'1-{len(팩토링이름) + 1}. 그 외 거래처 — 집계 (1/1 ~ {md(끝날)})')
-    줄쓰기({2: '거래처', 3: '계정명', 4: '차변', 5: '대변', 6: f'{md(끝날)} 잔액', 7: f'{md(다음날)} 이후 회수', 9: '남은 금액', 10: '비고'},
-          견머리, ((7, 8), (10, 15)))
-    집합 = {}
-    for 종류 in ('매출채권', '선수금'):
-        행 = [d for d in 집계 if d['종류'] == 종류]
-        첫 = 새[0]
-        for d in (행 or [None]):
-            r = 새[0]
-            if d is None:
-                줄쓰기({2: '해당 거래 없음', 3: 종류, 4: 0, 5: 0, 6: 0}, 견본, ((7, 8), (10, 15)), (4, 5, 6, 7, 9), (2, 3, 10))
-                continue
-            줄쓰기({2: d['거래처'], 3: 종류, 4: round(d['차'], 2), 5: round(d['대'], 2),
-                   6: (f'=D{r}-E{r}' if 종류 == '매출채권' else f'=E{r}-D{r}'),
-                   7: round(d['뒤'], 2) if 종류 == '매출채권' else None,
-                   9: (f'=F{r}-G{r}' if 종류 == '매출채권' else None), 10: d['비고'] or None},
-                  견본, ((7, 8), (10, 15)), (4, 5, 6, 7, 9), (2, 3, 10))
-        끝 = 새[0] - 1
-        r = 새[0]
-        줄쓰기({2: f'{종류} 소계', 4: f'=SUM(D{첫}:D{끝})', 5: f'=SUM(E{첫}:E{끝})', 6: f'=SUM(F{첫}:F{끝})',
-               7: f'=SUM(G{첫}:G{끝})' if 종류 == '매출채권' else None, 9: f'=SUM(I{첫}:I{끝})' if 종류 == '매출채권' else None},
-              견합, ((2, 3), (7, 8), (10, 15)), (4, 5, 6, 7, 9), 굵게=True)
-        집합[종류] = sum(d['잔'] for d in 행)
-    bs = {k: 팩토링잔[k] + 집합.get(k, 0.0) for k in ('매출채권', '선수금')}
-    제목(f'※ {md(끝날)} 매출채권 = 팩토링 {팩토링잔["매출채권"]:,.0f} + 그 외 {집합.get("매출채권", 0):,.0f} = {bs["매출채권"]:,.0f} (BS 매출채권) · '
-         f'선수금 = 팩토링 {팩토링잔["선수금"]:,.0f} + 그 외 {집합.get("선수금", 0):,.0f} = {bs["선수금"]:,.0f} · '
-         f'결산 후 회수 = 원장({md(원장끝)}까지) 대변' + (f' + 통장({md(통장끝)}까지) 입금' if 통장끝 is not None else ''), 굵게=False)
-    # ② 구역 ~ ③ 머리
-    for r in range(s2 - 1, s3 + 2):
-        놓기(줄[r])
-    # ③ 표
-    틀3 = 줄[d3[0]]
-    a3 = 새[0]
-    for d in (행3 or [None]):
-        값 = ({c: None for c in (2, 3, 5, 6, 8)} if d is None else
-              {2: d['거래처'], 3: d['계정'], 5: round(d['잔액'], 2), 6: round(d['지급'], 2), 8: d['비고']})
-        놓기(틀3, 값)
-    b3 = 새[0] - 1
-    for r in range(t3, max(줄) + 1):
-        새r = 놓기(줄[r])
-        if r == t3:
-            off = 새r - r
-            범위고침(새r, d3[0] + off, d3[1] + off, a3, b3)
+                표끝(새[0] - 1)
+        새[0] += 2
 
-    # ② 표 지급일이 숫자(46198)로 보이던 것 → 날짜 모양
-    머2 = next((r for r in range(1, ws.max_row + 1) if ws.cell(r, 4).value == '지급일'), None)
-    if 머2:
-        for r in range(머2 + 1, ws.max_row + 1):
-            if str(ws.cell(r, 2).value or '').strip() == '합계':
-                break
-            if isinstance(ws.cell(r, 4).value, (int, float)) and 30000 < ws.cell(r, 4).value < 80000:
-                ws.cell(r, 4).number_format = 'yyyy-mm-dd'
+        # ② 선급금 — 원장 선급금 계정 결산월 말 잔액 (지급처별로 먼저 지급한 것부터 청구 · 대체로 지움)
+        선급계정 = [a for a in g['계정'].unique() if 한글(a) == '선급금'] or [a for a in g['계정'].unique() if a.startswith('11801')]
+        sx = g[g['계정'].isin(선급계정) & (g['일자'] <= 끝날)].copy()
+        sx['이름'] = sx['거래처원'].fillna('(거래처 표시 없음)').map(커_이름정리)
+        sx = sx.sort_values(['일자', 'TID'], kind='stable')
+        열린, 남은대 = [], []
+        for 이름, x in sx.groupby('이름', sort=False):
+            큐 = [{'이름': 이름, '일자': y['일자'], '적요': y['적요'], '지급': float(y['차']), '청구': 0.0}
+                  for _, y in x[x['차'] > 0].iterrows()]
+            돈 = float(x['대'].sum())          # 청구 · 대체(대변) 합계를 먼저 지급한 것부터 지움 (날짜 순서와 무관)
+            for q in 큐:
+                뺄 = min(돈, q['지급'])
+                q['청구'] += 뺄
+                돈 -= 뺄
+            if 돈 > 0.005:
+                끝줄 = x[x['대'] > 0].iloc[-1]
+                남은대.append({'이름': 이름, '일자': 끝줄['일자'], '적요': 끝줄['적요'], '금액': 돈})
+            열린 += 큐
+        for z in 남은대:          # 지급처 이름이 다른 대체(예 : 청구 거래처 이름으로 대체) — 같은 금액을 지급한 지급처의 열린 지급에서 지움
+            짝 = sx[(sx['차'] - z['금액']).abs() < 0.01]
+            if len(짝):
+                대상 = 짝['이름'].iloc[0]
+                for q in [q for q in 열린 if q['이름'] == 대상]:
+                    뺄 = min(z['금액'], q['지급'] - q['청구'])
+                    q['청구'] += 뺄
+                    z['금액'] -= 뺄
+                    if z['금액'] <= 0.005:
+                        break
+        선급행 = [q for q in 열린 if q['지급'] - q['청구'] > 0.005] + \
+                 [{'이름': z['이름'], '일자': z['일자'], '적요': z['적요'], '지급': 0.0, '청구': z['금액'], '음': True}
+                  for z in 남은대 if z['금액'] > 0.005]
+        선급잔 = float(sx['차'].sum() - sx['대'].sum())
+        머2원 = 줄[s2]['값']
+        놓기(줄[s2], {2: f'2. 선급금 (기준일 : {끝날:%Y.%m.%d}) — 지급했으나 거래처에 아직 청구 · 대체하지 않은 금액 (미청구 대납비용 등)'})
+        놓기(줄[s2 + 1])
+        틀2 = 줄[s2 + 2]
+        a2 = 새[0]
+        for q in (선급행 or [None]):
+            if q is None:
+                놓기(틀2, {2: None, 3: '해당 없음', 4: None, 5: 0, 6: 0, 8: None})
+                continue
+            비 = 이전선급.get((q['이름'].upper(), pd.Timestamp(q['일자']).normalize(), round(q['지급'], 0)))
+            if q.get('음'):
+                비 = 비 or '지급 없이 대체된 금액 — 확인 필요'
+            r = 놓기(틀2, {2: q['이름'], 3: q['적요'] or None, 4: pd.Timestamp(q['일자']).to_pydatetime(),
+                           5: round(q['지급'], 2), 6: round(q['청구'], 2), 8: 비})
+            ws.cell(r, 4).number_format = 'yyyy-mm-dd'
+        b2 = 새[0] - 1
+        새r = 놓기(줄[t2])
+        범위고침(새r, s2 + 2 + (새r - t2), t2 - 1 + (새r - t2), a2, b2)
+        for c in range(1, 최대열 + 1):          # 합계 식 범위를 새 표에 맞춤
+            v = ws.cell(새r, c).value
+            if isinstance(v, str) and v.startswith('=SUM('):
+                ws.cell(새r, c).value = re.sub(r'([A-Z]+)\d+:([A-Z]+)\d+', rf'\g<1>{a2}:\g<2>{b2}', v)
+        r = 제목(f'※ 합계 {선급잔:,.0f} = BS 선급금 ({md(끝날)} 원장) · 지급처별로 먼저 지급한 것부터 청구 · 대체 금액을 지움', 굵게=False)
+        # ③ 머리까지 (② 합계 다음 줄 ~ ③ 머리)
+        for r in range(t2 + 1, s3 + 2):
+            if str(줄[r]['값'].get(2) or '').startswith('※'):
+                continue
+            놓기(줄[r])
+        # ③ 표
+        틀3 = 줄[d3[0]]
+        a3 = 새[0]
+        for d in (행3 or [None]):
+            값 = ({c: None for c in (2, 3, 5, 6, 8)} if d is None else
+                  {2: d['거래처'], 3: d['계정'], 5: round(d['잔액'], 2), 6: round(d['지급'], 2), 8: d['비고']})
+            놓기(틀3, 값)
+        b3 = 새[0] - 1
+        for r in range(t3, max(줄) + 1):
+            새r = 놓기(줄[r])
+            if r == t3:
+                off = 새r - r
+                범위고침(새r, d3[0] + off, d3[1] + off, a3, b3)
+
+        # ② 표 지급일이 숫자(46198)로 보이던 것 → 날짜 모양
+        머2 = next((r for r in range(1, ws.max_row + 1) if ws.cell(r, 4).value == '지급일'), None)
+        if 머2:
+            for r in range(머2 + 1, ws.max_row + 1):
+                if str(ws.cell(r, 2).value or '').strip() == '합계':
+                    break
+                if isinstance(ws.cell(r, 4).value, (int, float)) and 30000 < ws.cell(r, 4).value < 80000:
+                    ws.cell(r, 4).number_format = 'yyyy-mm-dd'
 
     # ── 머리 글 · 기준일 · 메모
     for r in range(1, ws.max_row + 1):
@@ -4819,7 +5180,7 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
             v2 = re.sub(r'\d{1,2}/\d{1,2} 이후 (회수|지급)', lambda m: f'{md(다음날)} 이후 {m.group(1)}', v2)
             if v2 != v:
                 ws.cell(r, c).value = v2
-    ws['B3'] = (f'단위 USD · 장부 = 퀵북 원장 {md(끝날)} 결산 · 결산 후 회수 · 지급 = 원장 {md(원장끝)}까지'
+    if ws['B3'].value: ws['B3'] = (f'단위 USD · 장부 = 퀵북 원장 {md(끝날)} 결산 · 결산 후 회수 · 지급 = 원장 {md(원장끝)}까지'
                 + (f' + 통장 {md(통장끝)}까지 (2026년 금융거래 파일)' if 통장끝 is not None else ''))
     기준칸 = next(((r, c) for r in range(1, 6) for c in range(2, 최대열 + 1) if ws.cell(r, c).value == '기준일'), None)
     if 기준칸:
@@ -4829,7 +5190,7 @@ def _커_채권채무(ws, g, 통장, 끝날, 매핑):
         ws.cell(메모3, 2).value = (f'※ {md(다음날)} 이후 지급 = 원장({md(원장끝)}까지) 차변'
                                    + (f' + 통장({md(통장끝)}까지) 출금' if 통장끝 is not None else '')
                                    + ' · 결산월 말 잔액을 넘는 지급은 넣지 않았습니다.')
-    안내.append(f'채권채무 : ① 팩토링({", ".join(팩토링이름) or "없음"}) 원장 · 그 외 거래처 집계 {len(집계)}줄, ③ 채무 {len(행3)}줄을 새로 썼습니다 (② 미청구 대납비용 표는 그대로).'
+    안내.append(f'채권채무 : ① 매출채권 · 선수금 집계와 팩토링({", ".join(팩토링이름) or "없음"}) 세부 원장, ② 선급금 {len(선급행)}줄, ③ 채무 {len(행3)}줄을 새로 썼습니다.'
               + (f' 미지급금 차변잔액(결산조정분개로 자산 대체)은 채무 표에서 뺐습니다 : {" · ".join(건너뜀)}' if 건너뜀 else ''))
     return 안내
 
@@ -6997,7 +7358,7 @@ def _자료실최신패키지():
     후보 = []
     for f in _glob.glob(os.path.join('자료실', '**', '*.xlsx'), recursive=True):
         n = os.path.basename(f)
-        if n.startswith('~$') or '연결패키지' not in n:
+        if n.startswith('~$') or '연결패키지' not in n or '씨티케이커넥트' in n:
             continue
         try:
             with zipfile.ZipFile(f) as z:
@@ -7101,7 +7462,56 @@ def 자료종류(바이트):
     return ''
 
 
-종류이름 = {'실적': '실적 엑셀', '원장': '원장 원본', '양식': '연결패키지 양식'}
+종류이름 = {'실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '원장': '원장 원본', '양식': '연결패키지 양식'}
+
+
+KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'      # 씨티케이커넥트(한국 법인) 연결패키지 자리
+
+
+def 한국법인자료(바이트, 이름=''):
+    """씨티케이커넥트(한국 법인) 연결패키지인지 — 파일 이름이나 원장_raw A1 의 회사 이름으로 봅니다."""
+    if '씨티케이커넥트' in str(이름):
+        return True
+    try:
+        _w = openpyxl.load_workbook(io.BytesIO(바이트), read_only=True)
+        for _n in _w.sheetnames:
+            if '원장_raw' in _n:
+                _a1 = str(_w[_n]['A1'].value or '')
+                return '씨티케이커넥트' in _a1
+    except Exception:
+        pass
+    return False
+
+
+def _KR패키지바이트():
+    """씨티케이커넥트 연결패키지 → (바이트, 파일 이름). 방금 올린 것 → 자료실 가장 새 파일 → 마지막 보관 순."""
+    _up = st.session_state.get('kr_pkg')
+    if _up is not None:
+        return _up.getvalue(), _up.name
+    후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+            if '씨티케이커넥트' in os.path.basename(f) and '연결패키지' in os.path.basename(f)
+            and not os.path.basename(f).startswith('~$')]
+    _p = max(후보, key=os.path.getmtime) if 후보 else None
+    if _p and (not os.path.exists(KR보관) or os.path.getmtime(_p) > os.path.getmtime(KR보관) + 1):
+        try:
+            import shutil as _sh
+            _sh.copyfile(_p, KR보관)
+            os.utime(KR보관, (os.path.getmtime(_p), os.path.getmtime(_p)))
+            with open(KR이름표, 'w', encoding='utf-8') as _f:
+                _f.write(os.path.basename(_p))
+        except OSError:
+            pass
+        with open(_p, 'rb') as _f:
+            return _f.read(), os.path.basename(_p)
+    if os.path.exists(KR보관):
+        with open(KR보관, 'rb') as _f:
+            _b = _f.read()
+        try:
+            _n = open(KR이름표, encoding='utf-8').read().strip()
+        except OSError:
+            _n = KR보관
+        return _b, _n
+    return None, ''
 
 
 def 자료받기(파일들):
@@ -7110,7 +7520,16 @@ def 자료받기(파일들):
     for f in 파일들 or []:
         바이트 = f.getvalue()
         종 = 자료종류(바이트)
-        if 종 == '실적':
+        if 종 == '실적' and 한국법인자료(바이트, f.name):      # 2026-11-03 : 씨티케이커넥트 패키지는 KR 자리에
+            종 = '한국실적'
+            try:
+                with open(KR보관, 'wb') as _f:
+                    _f.write(바이트)
+                with open(KR이름표, 'w', encoding='utf-8') as _f:
+                    _f.write(f.name)
+            except OSError:
+                pass
+        elif 종 == '실적':
             실적 = f
             _자리에쓰기(전월보관, 바이트, f.name)
         elif 종 == '원장':
@@ -7322,7 +7741,7 @@ if 메뉴 == '실적보고 엑셀작성':
                 except Exception:
                     pass
             _연 = int(_안내['연도'])
-            _폴더 = os.path.join(자료실, f'{_연}년 {_결산월}월')
+            _폴더 = os.path.join(자료실, f'{_연}년 {_결산월}월', 'CTKonnect')     # 2026-11-03 : 달 폴더 안 법인별 하위 폴더
             _이름 = f'{_연}. {(_결산월 - 1) // 3 + 1}Q_연결패키지_CTKonnect_{_결산월}월말_v{int(_버전)}.xlsx'
             if os.path.exists(os.path.join(_폴더, _이름)):      # 같은 이름이 이미 있으면 덮어쓰지 않고 다음 번호로
                 _n = int(_버전)
@@ -7815,15 +8234,24 @@ else:
 </div>""")
     st.stop()
 
-if 메뉴 == '씨티케이커넥트':
-    st.html(f"""<div class="wrap" translate="no">
-  <div class="page-head"><span class="t">실적보고 — 씨티케이커넥트</span><span class="pill">준비 중</span></div>
+법인 = 'CTKonnect'
+if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — 같은 화면을 씨티케이커넥트 연결패키지(KRW)로 그립니다
+    법인 = '씨티케이커넥트'
+    _kb, _kn = _KR패키지바이트()
+    if not _kb:
+        st.html(f"""<div class="wrap" translate="no">
+  <div class="page-head"><span class="t">실적보고 — 씨티케이커넥트</span><span class="pill">자료 없음</span></div>
   <div class="card" style="max-width:820px; margin-top:8px">
     <div style="font-size:15px; line-height:1.85; color:{T['ink2']}">
-      씨티케이커넥트(한국 법인) 실적 화면은 아직 만들지 않았습니다.<br>
-      지금은 <b style="color:{T['ink']}">CTKonnect</b>(미국 법인 CTKonnect, Inc.) 실적만 보여 드립니다 —
-      왼쪽 「실적보고 → CTKonnect」를 눌러 주세요.</div></div></div>""")
-    st.stop()
+      씨티케이커넥트(한국 법인) 연결패키지가 아직 없습니다.<br>
+      아래 상자에 <b style="color:{T['ink']}">「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」</b> 를 올려 주세요.
+      PC 에서는 자료실 달 폴더의 「씨티케이커넥트」 하위 폴더에 넣어 두면 자동으로 읽습니다.</div></div></div>""")
+        st.file_uploader('씨티케이커넥트 연결패키지 (.xlsx)', type=['xlsx'], key='kr_pkg')
+        if st.session_state.get('kr_pkg') is not None:
+            st.rerun()
+        st.stop()
+    데이터바이트, 쓰는파일 = _kb, _kn
+    설정칸.caption(f'📁 씨티케이커넥트 자료: {_kn}')
 
 # ══════════════════════════════════════════════════════════════
 # 실적보고 → 연결 손익계산서 (2026-11-02)
@@ -7831,8 +8259,7 @@ if 메뉴 == '씨티케이커넥트':
 #   두 법인 모두 연결패키지(26년 원장_raw · BS_IS_매핑) 양식에서 읽습니다.
 # ══════════════════════════════════════════════════════════════
 if 메뉴 == '연결 손익계산서':
-    KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'
-    미국이름 = ['CTKONNECT, INC', 'CTKONNECT INC', 'CTKONNECT,INC']           # 한국 원장에서 미국 법인을 찾을 글자
+    미국이름 = ['CTKONNECT', 'CTK ONNECT']           # 한국 원장에서 미국 법인을 찾을 글자 (더존 거래처명 「CTK onnect」)
     한국이름 = ['컴플리톤', '씨티케이커넥트', 'CTKCONNECT KOREA']             # 미국 원장에서 한국 법인을 찾을 글자 (구 이름 컴플리톤 포함)
 
     def _kr자료실():
@@ -7843,8 +8270,7 @@ if 메뉴 == '연결 손익계산서':
 
     st.html(f"""<div class="wrap" translate="no">
   <div class="page-head"><span class="t">실적보고 — 연결 손익계산서</span><span class="pill">CTKonnect + 씨티케이커넥트</span></div>
-  <div class="sub" style="margin:2px 0 6px">① CTKonnect → ② 씨티케이커넥트 → ③ 연결 순서로 봅니다 ·
-    연결 = 두 법인 단순합산 − 두 법인 사이 거래(내부거래) 제거</div></div>""")
+  <div class="sub" style="margin:2px 0 6px">연결정산표 — CTKonnect · 씨티케이커넥트 · 합계 · 연결조정 · 연결재무 (누적)</div></div>""")
 
     with st.expander('씨티케이커넥트 연결패키지 올리기', expanded=False):
         _kr = st.file_uploader('씨티케이커넥트(한국 법인) 연결패키지 — 「26년 원장_raw」 · 「BS_IS_매핑」 시트가 든 엑셀',
@@ -7859,21 +8285,7 @@ if 메뉴 == '연결 손익계산서':
                 pass
         st.caption('PC 에서는 자료실에 「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」 를 넣어 두면 자동으로 읽습니다.')
 
-    KR바이트, KR파일 = None, ''
-    if st.session_state.get('kr_pkg') is not None:
-        KR바이트, KR파일 = st.session_state['kr_pkg'].getvalue(), st.session_state['kr_pkg'].name
-    else:
-        _p = _kr자료실()
-        if _p and (not os.path.exists(KR보관) or os.path.getmtime(_p) > os.path.getmtime(KR보관) + 1):
-            with open(_p, 'rb') as _f:
-                KR바이트, KR파일 = _f.read(), os.path.basename(_p)
-        elif os.path.exists(KR보관):
-            with open(KR보관, 'rb') as _f:
-                KR바이트 = _f.read()
-            try:
-                KR파일 = open(KR이름표, encoding='utf-8').read().strip()
-            except OSError:
-                KR파일 = KR보관
+    KR바이트, KR파일 = _KR패키지바이트()
 
     def _읽기(바이트):
         r = 원장읽기(바이트)
@@ -7911,26 +8323,93 @@ if 메뉴 == '연결 손익계산서':
     US끝 = _월끝(US원장)
     KR끝 = _월끝(KR원장) if KR원장 is not None else 0
     끝월 = min(US끝, KR끝) if KR원장 is not None else US끝
+    US배수 = (환율 if 원화 else 1.0) if (환율 > 0 or not 원화) else 0.0
+    KR배수 = 1.0 if 원화 else (1.0 / 환율 if 환율 > 0 else 0.0)
 
-    줄순서 = ['매출액', '매출원가', '매출총이익', '판매관리비', '영업이익', '영업외손익', '세전이익', '법인세비용', '당기순이익']
-    굵은줄 = {'매출액', '매출총이익', '영업이익', '세전이익', '당기순이익'}
+    # ── 손익계산서 과목표 : CTKonnect 연결패키지 IS 시트 (Ⅰ.~ 구역 · 1. 2. 과목) 그대로
+    _w = openpyxl.load_workbook(io.BytesIO(데이터바이트), read_only=True)
+    _is = _w['IS']
+    구역 = []                     # [(구역이름, 성격, [과목...])]
+    for r in _is.iter_rows(min_row=8, max_row=120, max_col=5, values_only=True):
+        로마, 번호, 이름 = r[1], r[3], r[4]
+        이름 = str(이름 or '').replace(' ', '').strip()
+        if 로마 and 이름:
+            구역.append([이름, None, []])
+        elif 번호 and 이름 and 구역:
+            구역[-1][2].append(이름)
+    for z in 구역:                # 과목이 따로 없는 구역(법인세비용 등)은 구역 이름 자체가 과목
+        if not z[2]:
+            z[2] = [z[0]]
+    계산줄 = {'매출총이익', '영업이익', '법인세비용차감전계속사업이익', '계속사업이익', '당기순이익(손실)', '중단사업이익', '기타포괄손익'}
+    수익구역 = {'매출액', '기타수익', '금융수익', '지분법손익'}
 
-    def _손익(원장, 끝, 배수):
-        d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝)]
-        def S(m):
-            return d[m].groupby('월')['금액'].sum().reindex(range(1, 끝 + 1), fill_value=0.0) * 배수
-        o = {'매출액': S(d['분류'].eq('매출')), '매출원가': -S(d['분류'].eq('매출원가'))}
-        o['매출총이익'] = o['매출액'] - o['매출원가']
-        o['판매관리비'] = -S(d['분류'].eq('판관비'))
-        o['영업이익'] = o['매출총이익'] - o['판매관리비']
-        o['영업외손익'] = S(d['분류'].eq('영업외손익'))
-        o['세전이익'] = o['영업이익'] + o['영업외손익']
-        o['법인세비용'] = -S(d['분류'].isin(['법인세', '법인세비용']))
-        o['당기순이익'] = o['세전이익'] - o['법인세비용']
-        return pd.DataFrame(o).T.reindex(줄순서)
+    def _과목금액(원장, 배수):
+        """과목별 1~끝월 누적 — 수익은 +, 비용은 + (표시용) · 외환 · 환산손익은 순액으로 이익/손실 칸에 나눔."""
+        if 원장 is None:
+            return {}
+        d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)]
+        합 = d.groupby(d['계정과목'].astype(str).str.replace(' ', ''))['금액'].sum() * 배수     # 대변 − 차변
+        o = {}
+        for k, v in 합.items():
+            o[k] = o.get(k, 0.0) + float(v)
+        for 순, 이익, 손실 in (('외환차손익', '외환차익', '외환차손'), ('외화환산손익', '외화환산이익', '외화환산손실')):
+            n = o.pop(순, 0.0) + o.pop(이익, 0.0) + o.pop(손실, 0.0)
+            o[이익], o[손실] = max(n, 0.0), max(-n, 0.0) * -1     # 손실은 대변−차변이 음수
+        return o
+    US금 = _과목금액(US원장, US배수)
+    KR금 = _과목금액(KR원장, KR배수)
 
-    US배수 = (환율 if 원화 else 1.0) if 환율 > 0 or not 원화 else 0.0
-    KR배수 = (1.0 if 원화 else (1.0 / 환율 if 환율 > 0 else 0.0))
+    # ── 내부거래 (연결조정 하나) : 손익 계정 줄 중 거래처가 상대 법인인 줄
+    def _내부(원장, 상대이름, 법인, 배수):
+        if 원장 is None:
+            return pd.DataFrame()
+        d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)].copy()
+        n = d['Name'].fillna('').astype(str).str.upper()
+        d = d[n.apply(lambda s: any(k.upper() in s for k in 상대이름))].copy()
+        d['법인'] = 법인
+        d['환산'] = d['금액'] * 배수
+        d['과목'] = d['계정과목'].astype(str).str.replace(' ', '')
+        return d
+    IC = pd.concat([_내부(US원장, 한국이름, 'CTKonnect', US배수), _내부(KR원장, 미국이름, '씨티케이커넥트', KR배수)])
+    차변, 대변, 비고 = {}, {}, {}
+    가정글 = ''
+    if KR원장 is not None and len(IC):
+        과목구역 = {과: 구 for 구, _, 목 in 구역 for 과 in 목}
+        원가짝 = {'상품매출': '상품매출원가', '제품매출': '제품매출원가', '용역매출': '용역매출원가', '기타매출': '기타매출원가'}
+        가정들, 확인들 = [], []
+        for 판매, 구매 in (('씨티케이커넥트', 'CTKonnect'), ('CTKonnect', '씨티케이커넥트')):
+            s_ = IC[IC['법인'] == 판매]; b_ = IC[IC['법인'] == 구매]
+            수익 = s_[s_['과목'].map(lambda k: 과목구역.get(k, '') in 수익구역)]
+            비용 = b_[b_['과목'].map(lambda k: 과목구역.get(k, '') not in 수익구역)]
+            수익합 = {k: float(v) for k, v in 수익.groupby('과목')['환산'].sum().items() if abs(v) >= 0.5}
+            비용합 = {k: -float(v) for k, v in 비용.groupby('과목')['환산'].sum().items() if abs(v) >= 0.5}
+            for k, v in 수익합.items():                    # 파는 쪽 내부 수익 지움 = 차변
+                차변[k] = 차변.get(k, 0.0) + v
+            한도 = sum(수익합.values())
+            for k, v in 비용합.items():                    # 사는 쪽 내부 비용 지움 = 대변 (파는 쪽 내부 수익만큼만)
+                쓸 = min(v, max(한도, 0.0)); 한도 -= 쓸
+                if 쓸 >= 0.5:
+                    대변[k] = 대변.get(k, 0.0) + 쓸
+                if v - 쓸 >= 0.5:
+                    확인들.append(f'{구매} 의 {k} {v - 쓸:,.0f} 은 {판매} 쪽 내부 수익이 없어 지우지 않았습니다 — 확인 필요')
+            if 한도 >= 0.5:                                  # 사는 쪽 원장에서 비용을 못 찾은 내부 매출 → 같은 금액을 파는 쪽 매출원가에서 지움
+                for k, v in 수익합.items():
+                    if 과목구역.get(k) != '매출액' or 한도 < 0.5:
+                        continue
+                    쓸 = min(v, 한도); 한도 -= 쓸
+                    짝 = 원가짝.get(k, '상품매출원가')
+                    대변[짝] = 대변.get(짝, 0.0) + 쓸
+                    비고[짝] = f'「가정」 내부매출과 같은 금액을 매출원가에서 지움 (재고에 남은 내부이익은 그대로)'
+                    가정들.append(f'{판매} → {구매} 내부매출 {k} {쓸:,.0f}')
+        if 가정들:
+            가정글 = ('<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">「가정」 '
+                      + ' · '.join(가정들) + ' 은 사는 법인 원장에서 상대 이름으로 매출원가를 찾지 못해, 내부매출과 같은 금액을 '
+                      '매출원가에서 지웠습니다. 사는 법인 재고(상품 · 미착품 · 선급금)에 아직 남은 물건의 내부이익은 빼지 않았습니다 — '
+                      '재고 자료가 있어야 정확히 지울 수 있습니다.</div>')
+        if 확인들:
+            가정글 += '<div class="sub" style="color:#C00000; margin-top:4px">' + ' · '.join(확인들) + '</div>'
+        for k in set(차변) | set(대변):
+            비고.setdefault(k, '내부거래 제거')
 
     def _칸(v):
         if v is None or pd.isna(v) or abs(v) < 0.5:
@@ -7938,116 +8417,88 @@ if 메뉴 == '연결 손익계산서':
         t = f'{abs(v):,.0f}'
         return f'<span class="neg">({t})</span>' if v < 0 else t
 
-    def _월표(제목, 원장, 끝, 배수, 원통화, 메모):
-        t = _손익(원장, 끝, 배수)
-        머리 = ''.join(f'<th>{m}월</th>' for m in range(1, 끝 + 1)) + '<th>누적</th>'
-        몸 = ''
-        for 이름 in 줄순서:
-            v = t.loc[이름]
-            굵 = ' style="font-weight:700"' if 이름 in 굵은줄 else ''
-            몸 += (f'<tr{굵}><td class="lft">{"" if 이름 in 굵은줄 else "&nbsp;&nbsp;"}{이름}</td>'
-                   + ''.join(f'<td>{_칸(v[m])}</td>' for m in range(1, 끝 + 1)) + f'<td><b>{_칸(v.sum())}</b></td></tr>')
-        st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
-          <h3>{제목} 손익계산서 — 1~{끝}월 <span class="unitbadge">단위 {단위}</span></h3>
-          <div class="sub">{메모}{'' if (원통화 == 단위) else f' · 원래 통화 {원통화} → 평균환율 {환율:,.2f} 원/USD 로 {단위} 환산'}</div>
-          <div class="scrollx"><table class="lined" style="width:100%; min-width:{260 + 92 * (끝 + 1)}px">
-            <thead><tr><th class="lft" style="width:150px">구분</th>{머리}</tr></thead><tbody>{몸}</tbody></table></div>
-        </div></div>""")
-        return t
+    # ── 표 줄 만들기 : 구역 · 과목 (금액 있는 과목만) · 계산줄
+    줄들 = []        # (이름, 수준, us, kr, 차, 대, 비고)
+    구역합 = {}
+    def _과목줄(과, 수익):
+        u = US금.get(과, 0.0); k = KR금.get(과, 0.0)
+        if not 수익:
+            u, k = -u, -k
+        차, 대 = 차변.get(과, 0.0), 대변.get(과, 0.0)
+        연 = (u + k - 차 + 대) if 수익 else (u + k + 차 - 대)
+        return u, k, 차, 대, 연
+    쓴과목 = set()
+    for 이름, _, 목 in 구역:
+        if 이름 in 계산줄:
+            continue
+        수익 = 이름 in 수익구역
+        합 = [0.0] * 5
+        자식 = []
+        for 과 in 목:
+            v = _과목줄(과, 수익)
+            쓴과목.add(과)
+            합 = [a + b for a, b in zip(합, v)]
+            if any(abs(x) >= 0.5 for x in v) and 과 != 이름:
+                자식.append((과, 1, *v, 비고.get(과, '')))
+        구역합[이름] = 합
+        if any(abs(x) >= 0.5 for x in 합) or 이름 in ('매출액', '매출원가', '판매비와관리비'):
+            줄들.append((이름, 0, *합, 비고.get(이름, '') if 목 == [이름] else ''))
+            줄들.extend(자식)
+        # 계산줄은 해당 구역 뒤에 끼움
+        def _계(n, 값):
+            줄들.append((n, 0, *값, ''))
+        if 이름 == '매출원가':
+            _계('매출총이익', [구역합['매출액'][0] - 합[0], 구역합['매출액'][1] - 합[1], 0, 0, 구역합['매출액'][4] - 합[4]])
+        if 이름 == '판매비와관리비':
+            gp = [구역합['매출액'][i] - 구역합['매출원가'][i] for i in (0, 1, 4)]
+            _계('영업이익', [gp[0] - 합[0], gp[1] - 합[1], 0, 0, gp[2] - 합[4]])
+    def _g(n, i):
+        return 구역합.get(n, [0.0] * 5)[i]
+    세전 = [(_g('매출액', i) - _g('매출원가', i) - _g('판매비와관리비', i) + _g('기타수익', i) - _g('기타비용', i)
+             + _g('금융수익', i) - _g('금융비용', i) + _g('지분법손익', i)) for i in range(5)]
+    i법 = next((j for j, z in enumerate(줄들) if z[0] == '법인세비용'), None)
+    세전줄 = ('법인세비용차감전이익', 0, 세전[0], 세전[1], 0, 0, 세전[4], '')
+    if i법 is None:
+        줄들.append(세전줄)
+    else:
+        줄들.insert(i법, 세전줄)
+    순 = [세전[i] - _g('법인세비용', i) for i in range(5)]
+    줄들.append(('당기순이익', 0, 순[0], 순[1], 0, 0, 순[4], ''))
+    빠진 = sorted({k for k in list(US금) + list(KR금) if k not in 쓴과목 and abs(US금.get(k, 0) + KR금.get(k, 0)) >= 0.5})
 
-    탭1, 탭2, 탭3 = st.tabs(['① CTKonnect', '② 씨티케이커넥트', '③ 연결'])
-    with 탭1:
-        US표 = _월표('CTKonnect (미국 · CTKonnect, Inc.)', US원장, 끝월 or US끝, US배수, 'USD',
-                     f'연결패키지 「26년 원장_raw」 기준 · {_html.escape(str(쓰는파일 or ""))}')
-    with 탭2:
-        if KR원장 is None:
-            st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px; max-width:860px">
-              <h3>씨티케이커넥트 (한국 법인)</h3>
-              <div style="font-size:14.5px; line-height:1.9; color:{T['ink2']}">
-              {'씨티케이커넥트 연결패키지를 읽지 못했습니다 — ' + _html.escape(KR오류) if KR오류 else '아직 씨티케이커넥트 연결패키지가 없습니다.'}<br>
-              위 「씨티케이커넥트 연결패키지 올리기」 에서 CTKonnect 와 같은 양식(26년 원장_raw · BS_IS_매핑 시트)의 엑셀을 올려 주세요.</div></div></div>""")
-            KR표 = None
-        else:
-            KR표 = _월표('씨티케이커넥트 (한국 법인)', KR원장, 끝월, KR배수, 'KRW', f'연결패키지 「26년 원장_raw」 기준 · {_html.escape(KR파일)}')
-    with 탭3:
-        # 내부거래 : 손익 계정 줄 중 거래처가 상대 법인인 줄
-        def _내부(원장, 상대이름, 법인, 배수):
-            if 원장 is None:
-                return pd.DataFrame()
-            d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)].copy()
-            n = d['Name'].fillna('').astype(str).str.upper()
-            d = d[n.apply(lambda s: any(k.upper() in s for k in 상대이름))].copy()
-            d['법인'] = 법인
-            d['환산'] = d['금액'] * 배수
-            return d
-        IC = pd.concat([_내부(US원장, 한국이름, 'CTKonnect', US배수), _내부(KR원장, 미국이름, '씨티케이커넥트', KR배수)])
-        def _합(분류들):
-            return float(IC[IC['분류'].isin(분류들)]['환산'].sum()) if len(IC) else 0.0
-        내부매출 = _합(['매출'])
-        내부원가 = -_합(['매출원가'])
-        내부판관 = -_합(['판관비'])
-        내부외 = _합(['영업외손익'])
-        나머지 = 내부매출 - 내부원가 - 내부판관
-        조정 = pd.Series(0.0, index=줄순서)
-        if KR원장 is None:          # 상대 법인 자료가 없으면 한쪽만 지우면 손익이 틀어지므로 제거하지 않고 내역만 보여 줌
-            내부매출 = 내부원가 = 내부판관 = 내부외 = 나머지 = 0.0
-        if 나머지 < -0.5:            # 비용 쪽이 더 크면 상대 매출만큼만 지움 (원가 → 판관비 순) · 남는 것은 지우지 않고 알림
-            원가제거 = min(내부원가, 내부매출)
-            판관제거 = min(내부판관, max(내부매출 - 원가제거, 0.0))
-        else:
-            원가제거, 판관제거 = 내부원가, 내부판관
-        조정['매출액'] = -내부매출
-        조정['매출원가'] = -원가제거 - (나머지 if 나머지 > 0.5 else 0.0)
-        조정['판매관리비'] = -판관제거
-        조정['영업외손익'] = -내부외
-        조정['매출총이익'] = 조정['매출액'] - 조정['매출원가']
-        조정['영업이익'] = 조정['매출총이익'] - 조정['판매관리비']
-        조정['세전이익'] = 조정['영업이익'] + 조정['영업외손익']
-        조정['당기순이익'] = 조정['세전이익'] - 조정['법인세비용']
-        us = _손익(US원장, 끝월, US배수).sum(axis=1)
-        kr = _손익(KR원장, 끝월, KR배수).sum(axis=1) if KR원장 is not None else pd.Series(0.0, index=줄순서)
-        합 = us + kr
-        연결 = 합 + 조정
-        몸 = ''
-        for 이름 in 줄순서:
-            굵 = ' style="font-weight:700"' if 이름 in 굵은줄 else ''
-            몸 += (f'<tr{굵}><td class="lft">{"" if 이름 in 굵은줄 else "&nbsp;&nbsp;"}{이름}</td><td>{_칸(us[이름])}</td>'
-                   f'<td>{_칸(kr[이름]) if KR원장 is not None else "자료 없음"}</td><td>{_칸(합[이름])}</td>'
-                   f'<td>{_칸(조정[이름])}</td><td><b>{_칸(연결[이름])}</b></td></tr>')
-        가정글 = ''
-        if 나머지 > 0.5:
-            가정글 = (f'<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">「가정」 내부매출 {_칸(내부매출)} 중 '
-                      f'사는 법인 원장에서 상대 법인 이름으로 찾지 못한 {_칸(나머지)} 은, 결산월까지 모두 팔려 매출원가에 들어갔다고 보고 '
-                      f'매출원가에서 뺐습니다 (재고에 남은 내부이익은 빼지 않았습니다) — 실제 재고 · 매입 내역으로 바꿔야 합니다.</div>')
-        elif 나머지 < -0.5:
-            가정글 = (f'<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">내부거래 비용 {_칸(내부원가 + 내부판관)} 이 '
-                      f'상대 법인의 내부매출 {_칸(내부매출)} 보다 큽니다 — 매출만큼만 지우고 나머지 {_칸(-나머지)} 는 그대로 두었습니다 · 한쪽 장부에 빠진 거래가 있는지 확인 필요</div>')
-        if abs(내부외) > 0.5:
-            가정글 += (f'<div class="sub" style="color:#C00000; margin-top:4px">영업외 내부거래 두 법인 합계가 0 이 아닙니다 ({_칸(내부외)}) — '
-                       f'이자 · 수수료를 한쪽만 잡았는지 확인 필요</div>')
-        st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
-          <h3>연결 손익계산서 — 1~{끝월}월 누적 <span class="unitbadge">단위 {단위}</span></h3>
-          <div class="sub">평균환율 {환율:,.2f} 원/USD · {'CTKonnect 를 원화로 환산' if 원화 else '씨티케이커넥트를 달러로 환산'} ·
-            두 법인 모두 결산이 끝난 달(1~{끝월}월)까지 · 연결조정 = 두 법인 사이 거래 제거 (아래 내역)</div>
-          <div class="scrollx"><table class="lined" style="width:100%; min-width:760px">
-            <colgroup><col style="width:22%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"><col style="width:15.6%"></colgroup>
-            <thead><tr><th class="lft">구분</th><th>① CTKonnect</th><th>② 씨티케이커넥트</th><th>단순합산</th><th>연결조정</th><th>연결</th></tr></thead>
-            <tbody>{몸}</tbody></table></div>{가정글}
-          {'' if KR원장 is not None else f'<div class="sub" style="margin-top:8px">씨티케이커넥트 자료가 아직 없어 ① CTKonnect 만 들어 있습니다 · 아래 내부거래는 씨티케이커넥트 자료가 들어오면 두 법인 함께 제거합니다.</div>'}
-        </div></div>""")
-        if len(IC):
-            줄 = ''.join(
-                f'<tr><td class="lft">{r["법인"]}</td><td>{r["거래일"]:%Y-%m-%d}</td><td class="lft">{_html.escape(str(r["계정과목"]))}</td>'
-                f'<td class="lft">{_html.escape(str(r["Name"]))}</td><td class="lft" style="font-weight:400">{_html.escape(str(r["Description"] or ""))[:60]}</td>'
-                f'<td>{_칸(r["환산"])}</td></tr>' for _, r in IC.sort_values(['법인', '거래일']).iterrows())
-            st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:12px">
-              <h3>연결조정 내역 — 두 법인 사이 손익 거래 <span class="unitbadge">단위 {단위}</span></h3>
-              <div class="sub">손익 계정 줄 중 거래처가 상대 법인(한국 : {' · '.join(한국이름)} / 미국 : CTKonnect, Inc.)인 줄 · 금액은 이익(+) · 비용(−) 기준</div>
+    굵게 = {'매출총이익', '영업이익', '법인세비용차감전이익', '당기순이익'}
+    몸 = ''
+    for 이름, 수준, u, k, 차, 대, 연, 비 in 줄들:
+        st_ = ' style="font-weight:700; background:rgba(127,127,127,.07)"' if 이름 in 굵게 else (' style="font-weight:700"' if 수준 == 0 else '')
+        몸 += (f'<tr{st_}><td class="lft">{"&nbsp;&nbsp;&nbsp;" * 수준}{_html.escape(이름)}</td><td>{_칸(u)}</td>'
+               f'<td>{_칸(k) if KR원장 is not None else "-"}</td><td>{_칸(u + k)}</td>'
+               f'<td>{_칸(차)}</td><td>{_칸(대)}</td><td><b>{_칸(연)}</b></td>'
+               f'<td class="lft" style="font-weight:400; color:{"#C00000" if "가정" in 비 else T["ink3"]}">{_html.escape(비)}</td></tr>')
+    st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
+      <h3>연결 손익계산서 — {US연도}년 1~{끝월}월 누적 <span class="unitbadge">단위 {단위}</span></h3>
+      <div class="sub">평균환율 {환율:,.2f} 원/USD · {'CTKonnect(USD)를 원화로 환산' if 원화 else '씨티케이커넥트(KRW)를 달러로 환산'} ·
+        합계 = 두 법인 단순합산 · 연결조정 = 두 법인 사이 거래(내부거래) 제거 · 연결재무 = 합계 ∓ 연결조정</div>
+      <div class="scrollx"><table class="lined" style="width:100%; min-width:1080px">
+        <colgroup><col style="width:17%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:11%"><col style="width:19%"></colgroup>
+        <thead><tr><th class="lft" rowspan="2">과목</th><th rowspan="2">CTKonnect</th><th rowspan="2">씨티케이커넥트</th><th rowspan="2">합계</th>
+          <th colspan="2">연결조정</th><th rowspan="2">연결재무</th><th rowspan="2">비고</th></tr>
+          <tr><th>차변</th><th>대변</th></tr></thead>
+        <tbody>{몸}</tbody></table></div>{가정글}
+      {'' if not 빠진 else f'<div class="sub" style="color:#C00000; margin-top:6px">IS 과목표에 없는 과목이 있어 표에 넣지 못했습니다 : {" · ".join(빠진)} — BS_IS_매핑 확인 필요</div>'}
+      {'' if KR원장 is not None else ('<div class="sub" style="margin-top:8px">' + (('씨티케이커넥트 연결패키지를 읽지 못했습니다 — ' + _html.escape(KR오류)) if KR오류 else '씨티케이커넥트 연결패키지가 아직 없어 CTKonnect 만 들어 있습니다 — 위 「씨티케이커넥트 연결패키지 올리기」 에서 올려 주세요.') + ' 내부거래는 두 법인 자료가 다 있을 때 지웁니다.</div>')}
+      <div class="sub" style="margin-top:6px">CTKonnect : {_html.escape(str(쓰는파일 or ''))}{(' · 씨티케이커넥트 : ' + _html.escape(KR파일)) if KR파일 else ''}</div>
+    </div></div>""")
+    if len(IC):
+        줄 = ''.join(
+            f'<tr><td class="lft">{r["법인"]}</td><td>{r["거래일"]:%Y-%m-%d}</td><td class="lft">{_html.escape(str(r["계정과목"]))}</td>'
+            f'<td class="lft">{_html.escape(str(r["Name"]))}</td><td class="lft" style="font-weight:400">{_html.escape(str(r["Description"] or ""))[:60]}</td>'
+            f'<td>{_칸(r["환산"])}</td></tr>' for _, r in IC.sort_values(['법인', '거래일']).iterrows())
+        with st.expander(f'내부거래 내역 — 두 법인 사이 손익 거래 {len(IC)}줄', expanded=False):
+            st.html(f"""<div class="wrap" translate="no"><div class="card">
+              <div class="sub">손익 계정 줄 중 거래처가 상대 법인(한국 : {' · '.join(한국이름)} / 미국 : CTKonnect, Inc.)인 줄 · 금액 = 이익(+) · 비용(−) · 단위 {단위}</div>
               <div class="scrollx"><table class="lined" style="width:100%; min-width:820px">
                 <thead><tr><th class="lft">법인</th><th>일자</th><th class="lft">계정</th><th class="lft">거래처</th><th class="lft">적요</th><th>금액</th></tr></thead>
                 <tbody>{줄}</tbody></table></div></div></div>""")
-        else:
-            st.caption('두 법인 사이 손익 거래를 찾지 못했습니다.')
     st.stop()
 
 try:
@@ -8133,9 +8584,9 @@ SRED = SRED월별(당해원장)
 
 
 # CTKonnect 장부 통화는 USD 하나 — 표시 통화 · 환율 칸이 없습니다 (캐나다는 CAD/USD 선택)
-통화 = 'USD'
+통화 = 'KRW' if 법인 == '씨티케이커넥트' else 'USD'      # 2026-11-03 : 씨티케이커넥트는 원화
 환율 = 1.0
-if 메뉴 in ('월간실적', 'CTKonnect') and not 입력값['단일'] and not 입력값['서술']:
+if 메뉴 in ('월간실적', 'CTKonnect', '씨티케이커넥트') and not 입력값['단일'] and not 입력값['서술']:
     설정칸.caption('ℹ️ 연결패키지에 「월간보고_입력」 시트가 없어 목표·진척률·코멘트는 비어 있습니다.')
 배율 = 1.0
 표시나눔 = 1          # CTKonnect : 금액을 천 단위(K)가 아니라 USD 그대로 보여 줍니다 (2026-10-29)
@@ -8210,7 +8661,7 @@ def 상품채권html(원장, 기준일):
 대출기초_확인 = {k: float(v) for k, v in dict(_비밀값('loan_opening', {})).items()}   # 25년 말 차입 잔액 — 사용자 확인 (Secrets) · 대출금 표에만 씀
 
 
-def 대출금html(원장, 보고월, 전년=None):
+def 대출금html(원장, 보고월, 전년=None, 기초보정=None, 한도보정=None, 기초설명=None, 통화='USD'):
     """차입금 계정(단기 · 장기)의 대출처별 차입 · 상환 · 잔액 · 이자와 거래 내역 (CTKonnect, 2026-10-29)."""
     d = 원장[원장['계정과목'].astype(str).str.contains('차입금') & 원장['월'].le(보고월)].copy()
     if d.empty:
@@ -8225,8 +8676,10 @@ def 대출금html(원장, 보고월, 전년=None):
         if len(p):
             기초별 = (p['Credit'] - p['Debit']).groupby(p['Name'].map(이름)).sum()
     확인기초 = False
-    if 기초별.abs().sum() < 0.5 and 대출기초_확인:     # 25년 원장이 없으면 담당자가 알려 준 25년 말 잔액
-        기초별 = pd.Series(대출기초_확인, dtype=float)
+    _기초확인 = 대출기초_확인 if 기초보정 is None else 기초보정
+    _한도확인 = 대출한도_확인 if 한도보정 is None else 한도보정
+    if 기초별.abs().sum() < 0.5 and _기초확인:     # 25년 원장이 없으면 담당자가 알려 준 25년 말 잔액
+        기초별 = pd.Series(_기초확인, dtype=float)
         확인기초 = True
     이자 = 원장[원장['계정과목'].astype(str).eq('이자비용') & 원장['월'].le(보고월)].copy()
     이자['대출처'] = 이자['Name'].map(이름)
@@ -8243,9 +8696,9 @@ def 대출금html(원장, 보고월, 전년=None):
         이 = float(이자별.get(곳, 0.0))
         율 = re.findall(r'(\d+\.\d+)\s*%', ' '.join(x['Description'].dropna().astype(str)))
         비고 = (f'상환이 기초 + 차입보다 {금액(-잔)} 많음 — 확인 필요' if 잔 < -0.5 else
-                ('기초 = 25년 말 차입 잔액 (담당자 확인 · 26년 원장에는 없음)' if 확인기초 and abs(기초) > 0.5 else
+                ((기초설명 or '기초 = 25년 말 차입 잔액 (담당자 확인 · 26년 원장에는 없음)') if 확인기초 and abs(기초) > 0.5 else
                  (f'최근 금리 {율[-1]}%' if 율 else '')))
-        한도 = 대출한도_확인.get(곳)
+        한도 = _한도확인.get(곳)
         남은 = (한도 - 잔) if 한도 else None
         for i, v in enumerate((기초, 차입, 상환, 잔, 이)):
             합[i] += v
@@ -8264,11 +8717,10 @@ def 대출금html(원장, 보고월, 전년=None):
                  f'<td>{구분}</td><td>{금액(r["Credit"] if 구분 == "차입" else -r["Debit"])}</td>'
                  f'<td class="lft" style="font-weight:400;background:transparent">{_html.escape(str(r["Description"] or ""))}</td></tr>')
     return f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>대출금 내역 <span class="unitbadge">단위 USD</span></h3>
+      <div class="card"><h3>대출금 내역 <span class="unitbadge">단위 {통화}</span></h3>
         <div class="sub">원장 차입금 계정 · 1~{보고월}월 · 잔액 = 기초 + 차입 − 상환 · 남은 한도 = 한도 − 잔액 · 한도는 담당자 확인 값 · 이자 = 원장 이자비용(대출처별)</div>
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed;">
-          <colgroup><col style="width:16%"><col style="width:9.5%"><col style="width:9%"><col style="width:9.5%"><col style="width:9.5%">
-            <col style="width:9.5%"><col style="width:9.5%"><col style="width:8%"><col style="width:19.5%"></colgroup>
+          <colgroup>{'<col style="width:13%"><col style="width:7%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:11.5%"><col style="width:7%"><col style="width:11%"><col style="width:16%">' if 통화 == 'KRW' else '<col style="width:16%"><col style="width:9.5%"><col style="width:9%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:9.5%"><col style="width:8%"><col style="width:19.5%">'}</colgroup>
           <thead><tr><th>대출처</th><th>한도</th><th>기초 (25년 말)</th><th>차입</th><th>상환</th><th>{보고월}월 말 잔액</th>
             <th>남은 한도</th><th>이자 (1~{보고월}월)</th><th>비고</th></tr></thead>
           <tbody>{요약}</tbody></table></div>
@@ -8303,7 +8755,7 @@ def K(v):
 
 
 단위K = (f'K {통화}' if 표시나눔 == 1000 else 통화)
-환율문구 = '' if 통화 == 'USD' else f' · 환율 1 USD = {환율:.4f} USD'
+환율문구 = '' if 환율 == 1.0 else f' · 환율 1 USD = {환율:.4f} {통화}'
 
 
 def 차트제목(제목, 단위=None):
@@ -8364,11 +8816,11 @@ def 분석엑셀캐시(열쇠):
 
 def 엑셀열쇠():
     """원장이 바뀌면 값이 달라지는 「지문」 — 이 값이 같으면 엑셀을 다시 만들지 않습니다."""
-    return (당해연도, 보고월, len(당해원장), len(전년원장),
+    return (법인, 당해연도, 보고월, len(당해원장), len(전년원장),
             round(float(당해원장['금액'].abs().sum()), 2), round(float(기초현금), 2))
 
 
-if 메뉴 == 'CTKonnect':
+if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     제목칸, 내려받기칸 = st.columns([4, 1], gap='small')
     with 내려받기칸:
         if st.session_state.get('엑셀만들기'):
@@ -8376,7 +8828,7 @@ if 메뉴 == 'CTKonnect':
                 엑셀바이트 = 분석엑셀캐시(엑셀열쇠())
                 st.download_button(
                     '⤓  분석 엑셀 내려받기', data=엑셀바이트,
-                    file_name=f'CTKonnect_실적분석_{당해연도}년{보고월}월누적_클로드작성.xlsx',
+                    file_name=f'{법인}_실적분석_{당해연도}년{보고월}월누적_클로드작성.xlsx',
                     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
                     width='stretch',
                     help='지금 화면의 손익·현금흐름·미수채권과 처리본 원장을 담은 엑셀입니다')
@@ -8389,8 +8841,8 @@ if 메뉴 == 'CTKonnect':
                       help='누르면 손익·현금흐름·미수채권과 처리본 원장을 담은 엑셀을 만듭니다')
     with 제목칸:
         st.html(f"""<div class="wrap" translate="no" style="margin-bottom:0">
-      <div class="page-head"><span class="t">실적보고 — CTKonnect</span>
-        <span class="pill">{당해연도}년 1~{보고월}월 누적</span></div>
+      <div class="page-head"><span class="t">실적보고 — {법인}</span>
+        <span class="pill">{당해연도}년 1~{보고월}월 누적{' · 단위 원' if 통화 == 'KRW' else ''}</span></div>
     </div>""")
 
     이전월 = 보고월 - 1 if 보고월 > 1 else None
@@ -8747,9 +9199,15 @@ if 메뉴 == 'CTKonnect':
             rows += 행('상품매출원가', 원가L, 들여=1)
         else:
             rows = 행('매출액', 매출L, True, 예상=예상매출)
-            rows += 행('상품수수료매출 (중개)', 중개L, 들여=1)
-            rows += 행('IOR매출', IORL, 들여=1)
-            rows += 행('상품매출', 상품L, 들여=1)
+            if 법인 == '씨티케이커넥트':        # 한국 법인 : 계정과목별 매출 줄
+                for _n in ('제품매출', '상품매출', '용역매출', '기타매출'):
+                    _v = 월별(IS['계정과목'].astype(str).eq(_n))
+                    if any(abs(x) > 0.5 for x in _v):
+                        rows += 행(_n, _v, 들여=1)
+            else:
+                rows += 행('상품수수료매출 (중개)', 중개L, 들여=1)
+                rows += 행('IOR매출', IORL, 들여=1)
+                rows += 행('상품매출', 상품L, 들여=1)
             rows += 행('매출원가', 원가L, 예상=예상원가)
         rows += 행('매출총이익', 총이익L, True, 예상=예상총이익)
         # 판관비 합계는 SR&ED 차감 전, SR&ED 는 따로 한 줄 (2026-10-27 요청)
@@ -9092,7 +9550,7 @@ if 메뉴 == 'CTKonnect':
                                  help=f'고른 항목의 {연도X}년 1~{보고월X}월 누적 금액을 거래처별로 보여줍니다')
     손익조건, 손익부호 = 항목조건_손익(손익골라본)
     손익세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 USD</span></h3>
+      <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {통화}</span></h3>
         <div class="sub">{연도X}년 1~{보고월X}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
         {세부패널(누적IS[손익조건], '금액', 손익부호)}</div></div>"""
     손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (연결패키지 요약보고 4번 표)'
@@ -9265,7 +9723,7 @@ if 메뉴 == 'CTKonnect':
                 + '</div></details></div>')
 
     효율화html = ''
-    if 당해보기:
+    if 당해보기 and 법인 == 'CTKonnect':      # 조직운영안 · 기타주요사항은 CTKonnect 패키지에만 있음
         _과제행 = 과제기록적용('조직운영안', (BS밑자료 or {}).get('원가절감') or [], (당해연도, 보고월))
         _최근 = {}
         for _r in _과제행:
@@ -9360,13 +9818,25 @@ if 메뉴 == 'CTKonnect':
         else:
             자금대상 = None
         자금세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>{자금골라본} <span class="unitbadge">단위 USD</span></h3>
+      <div class="card"><h3>{자금골라본} <span class="unitbadge">단위 {통화}</span></h3>
         <div class="sub">1~{보고월}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
         {세부패널(자금대상, '영향', 1)}</div></div>"""
         자금칸, 자금세부칸 = st.columns([2, 1], gap='small')
         with 자금칸:
             st.html(자금html)
-            st.html(대출금html(당해원장, 보고월, 전년원장))
+            대출금옵션 = {}
+            if 법인 == '씨티케이커넥트':          # 기초 = 26년 BS기초(25년 말 재무상태표)의 차입금 · 한도 없음
+                try:
+                    _b0 = pd.read_excel(io.BytesIO(데이터바이트), sheet_name='26년 BS기초', header=None)
+                    _차입기초 = float(pd.to_numeric(_b0[_b0[5].astype(str).str.contains('차입금', na=False)][1], errors='coerce').fillna(0).sum())
+                except Exception:
+                    _차입기초 = 0.0
+                _곳들 = (당해원장[당해원장['계정과목'].astype(str).str.contains('차입금')]['Name']
+                         .dropna().astype(str).str.strip().unique().tolist())
+                _곳 = _곳들[0] if len(_곳들) == 1 else '(25년 말 잔액 · 대출처 미상)'
+                대출금옵션 = dict(기초보정=({_곳: _차입기초} if abs(_차입기초) > 0.5 else {}), 한도보정={},
+                                  기초설명='기초 = 25년 말 재무상태표 차입금 (26년 BS기초 시트)', 통화='KRW')
+            st.html(대출금html(당해원장, 보고월, 전년원장, **대출금옵션))
         with 자금세부칸:
             st.html(자금세부html)
 
