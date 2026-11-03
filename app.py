@@ -7541,6 +7541,222 @@ def _자리에쓰기(자리, 바이트, 이름):
         return False
 
 
+from openpyxl.styles import Font
+# ══════════════════════════════════════════════════════════════════════════
+# 씨티케이커넥트(한국 법인) 연결패키지 만들기 — 2026-11-03
+#   더존 분개장(「분개장_…」 시트) + 전월 씨티케이커넥트 연결패키지 → 결산월 연결패키지
+#   · 전월 패키지를 그대로 두고 「26년 원장_raw」 만 새 분개장으로 갈아 끼웁니다 (BS · IS · 요약보고 수식 · 양식은 그대로)
+#   · 기초잔액 = 전월 패키지 「26년 BS기초」(25년 말 확정 재무상태표)
+#   · 계정 연결 = 전월 패키지 「BS_IS_매핑」 — 새 계정은 계정번호로 임시 연결하고 빨간 「확인 필요」
+#   · Q 활동분류 · R 활동세부 = 전월 원장_raw 의 같은 전표 줄에서 이어받음 (없으면 계정 기준 기본값)
+# ══════════════════════════════════════════════════════════════════════════
+def 한국분개장인지(바이트):
+    """더존 분개장 파일인지 — 「분개장」 시트가 있고 머리글에 계정과목 · 차변 · 대변."""
+    try:
+        _w = openpyxl.load_workbook(io.BytesIO(바이트), read_only=True)
+        for n in _w.sheetnames:
+            if '분개장' in n:
+                for r in _w[n].iter_rows(min_row=1, max_row=8, values_only=True):
+                    글 = ' '.join(str(x) for x in r if x is not None)
+                    if '계정과목' in 글 and '차변' in 글 and '대변' in 글:
+                        return True
+    except Exception:
+        pass
+    return False
+
+
+_KR기본과목 = {
+    '103': ('BS', '현금및현금성자산'), '108': ('BS', '매출채권'), '120': ('BS', '미수금'), '122': ('BS', '기타금융자산(유동)'),
+    '131': ('BS', '선급금'), '133': ('BS', '선급비용'), '134': ('BS', '미수금'), '135': ('BS', '부가세대급금'),
+    '136': ('BS', '당기법인세자산'), '146': ('BS', '상품'), '150': ('BS', '제품'), '169': ('BS', '재공품'),
+    '171': ('BS', '재공품'), '178': ('BS', '기타금융자산(비유동)'), '182': ('BS', '관계기업투자자산'),
+    '198': ('BS', '사외적립자산'), '212': ('BS', '비품'), '213': ('BS', '비품-감가상각누계액'), '214': ('BS', '건설중인자산'),
+    '233': ('BS', '상표권'), '240': ('BS', '소프트웨어'), '251': ('BS', '매입채무'), '253': ('BS', '미지급금'),
+    '254': ('BS', '예수금'), '255': ('BS', '부가세예수금'), '259': ('BS', '선수금'), '260': ('BS', '단기차입금'),
+    '262': ('BS', '미지급비용'), '276': ('BS', '전환사채(유동)'), '277': ('BS', '전환사채(유동)'), '278': ('BS', '전환사채(유동)'),
+    '279': ('BS', '파생상품금융부채(유동)'), '295': ('BS', '확정급여채무'), '331': ('BS', '보통주자본금'),
+    '341': ('BS', '주식발행초과금'), '349': ('BS', '기타자본잉여금'), '377': ('BS', '미처분이익잉여금'),
+    '381': ('BS', '주식할인발행차금'), '384': ('BS', '기타자본조정'), '397': ('BS', '주식매수선택권'),
+    '401': ('IS', '상품매출'), '404': ('IS', '제품매출'), '414': ('IS', '용역매출'), '451': ('IS', '상품매출원가'),
+    '455': ('IS', '제품매출원가'), '457': ('IS', '용역매출원가'), '533': ('IS', '제품매출원가'), '537': ('IS', '제품매출원가'),
+    '733': ('IS', '용역매출원가'), '801': ('IS', '급여'), '802': ('IS', '급여'), '808': ('IS', '퇴직급여'),
+    '811': ('IS', '복리후생비'), '812': ('IS', '여비교통비'), '813': ('IS', '접대비'), '814': ('IS', '통신비'),
+    '815': ('IS', '수도광열비'), '816': ('IS', '전력비'),
+    '817': ('IS', '세금과공과'), '818': ('IS', '감가상각비'), '819': ('IS', '지급임차료'), '820': ('IS', '수선비'),
+    '821': ('IS', '보험료'), '822': ('IS', '차량유지비'),
+    '823': ('IS', '경상연구개발비'), '824': ('IS', '운반비'), '825': ('IS', '교육훈련비'), '826': ('IS', '도서인쇄비'),
+    '827': ('IS', '잡비'), '829': ('IS', '사무용품비'), '830': ('IS', '소모품비'), '831': ('IS', '지급수수료'),
+    '833': ('IS', '광고선전비'), '835': ('IS', '대손상각비'), '840': ('IS', '무형자산상각비'), '842': ('IS', '견본비'),
+    '901': ('IS', '이자수익'), '903': ('IS', '배당금수익'), '907': ('IS', '외환차손익'), '910': ('IS', '외화환산손익'),
+    '930': ('IS', '잡이익'), '931': ('IS', '이자비용'), '932': ('IS', '외환차손익'), '933': ('IS', '기부금'),
+    '935': ('IS', '외화환산손익'), '960': ('IS', '잡손실'), '998': ('IS', '법인세비용')}
+_KR기본활동 = {'801': '인건비성 항목', '802': '인건비성 항목', '808': '인건비성 항목', '811': '인건비성 항목',
+              '819': '건물', '814': 'ICT', '812': '출장비', '824': '운반 및 창고료', '831': '외부용역',
+              '813': '소모성경비', '826': '소모성경비', '830': '소모성경비', '842': '소모성경비',
+              '827': '소모성경비', '825': '소모성경비', '829': '소모성경비', '822': '차량'}
+_KR수익과목 = {'상품매출', '제품매출', '용역매출', '기타매출', '패키지매출', '이자수익', '잡이익', '외환차손익',
+              '외화환산손익', '배당금수익'}
+
+
+def _KR분개장읽기(바이트):
+    xls = pd.ExcelFile(io.BytesIO(바이트))
+    시트 = next(n for n in xls.sheet_names if '분개장' in n)
+    raw = pd.read_excel(xls, sheet_name=시트, header=None, nrows=12)
+    머리 = next(i for i in range(len(raw))
+               if any(str(x).replace('\n', '') == '계정과목' for x in raw.iloc[i].tolist()))
+    d = pd.read_excel(xls, sheet_name=시트, header=머리)
+    d.columns = [str(c).replace('\n', '').strip() for c in d.columns]
+    d = d[d['일자'].map(lambda x: hasattr(x, 'year') or bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(x))))].copy()
+    d['일자'] = pd.to_datetime(d['일자'])
+    d['코드'] = pd.to_numeric(d['계정코드'], errors='coerce').fillna(0).astype(int).astype(str)
+    d['계정'] = d['코드'] + ' ' + d['계정과목'].astype(str).str.strip()
+    d['차'] = pd.to_numeric(d['차변'], errors='coerce').fillna(0.0)
+    d['대'] = pd.to_numeric(d['대변'], errors='coerce').fillna(0.0)
+    d['전표'] = (d['일자'].dt.strftime('%m%d') + '-'
+                 + pd.to_numeric(d['전표번호'], errors='coerce').fillna(0).astype(int).astype(str).str.zfill(5))
+    for c in ('적요', '거래처명', '유형'):
+        if c not in d.columns:
+            d[c] = None
+    if abs(d['차'].sum() - d['대'].sum()) >= 1:
+        raise ValueError(f'분개장 차변 합계와 대변 합계가 다릅니다 ({d["차"].sum():,.0f} / {d["대"].sum():,.0f})')
+    return d, 시트
+
+
+def KR패키지만들기(분개장바이트, 전월바이트):
+    """→ (엑셀 바이트, 안내 dict). 전월바이트 = 전월(또는 같은 달 이전 버전) 씨티케이커넥트 연결패키지."""
+    RED = Font(name='맑은 고딕', size=9, bold=True, color='FFC00000')
+    d, 시트이름 = _KR분개장읽기(분개장바이트)
+    끝날 = d['일자'].max()
+    연도, 결산월 = int(끝날.year), int(끝날.month)
+    wb = openpyxl.load_workbook(io.BytesIO(전월바이트))
+    if '26년 원장_raw' not in wb.sheetnames or '씨티케이커넥트' not in str(wb['26년 원장_raw']['A1'].value or ''):
+        raise ValueError('③ 전월 연결패키지가 씨티케이커넥트 패키지가 아닙니다 — 「…연결패키지_씨티케이커넥트_…」 파일을 올려 주세요.')
+    안내 = {'연도': 연도, '결산월': 결산월, '줄': len(d), '새계정': [], '알림': []}
+
+    # ── BS_IS_매핑 : 있는 것 그대로 + 새 계정 추가
+    M = wb['BS_IS_매핑']
+    매핑 = {}
+    마지막 = 1
+    for r in range(2, M.max_row + 1):
+        a = M.cell(r, 1).value
+        if a:
+            매핑[str(a).strip()] = (M.cell(r, 2).value, M.cell(r, 3).value)
+            마지막 = r
+    틀 = [_커_스타일(M.cell(2, c)) for c in range(1, 5)]
+    for 계정 in sorted(set(d['계정']) - set(매핑), key=lambda s: int(re.match(r'^\d+', s).group(0))):
+        c = 계정.split(' ', 1)[0]
+        k, g = _KR기본과목.get(c, ('BS' if c[0] in '123' else 'IS',
+                                   '잡비' if c[0] == '8' else ('잡손실' if c[0] == '9' else '기타')))
+        마지막 += 1
+        for j, v in enumerate((계정, k, g, '새 계정 — 계정번호로 임시 연결 (확인 필요)'), 1):
+            _커_입히기(M.cell(마지막, j), 틀[min(j - 1, 3)])
+            M.cell(마지막, j).value = v
+        M.cell(마지막, 4).font = RED
+        매핑[계정] = (k, g)
+        안내['새계정'].append(f'{계정} → {g}')
+
+    # ── 기초잔액 : 26년 BS기초 (A 계정명 · B 25년 말)
+    B = wb['26년 BS기초']
+    기초 = {}
+    for r in range(7, B.max_row + 1):
+        a, v = B.cell(r, 1).value, B.cell(r, 2).value
+        if a and isinstance(v, (int, float)):
+            기초[str(a).strip()] = float(v)
+
+    # ── 자연 잔액 방향 (자산 · 비용 = 차변)
+    _자산과목 = {str(wb['BS'].cell(rr, 5).value or '').replace(' ', '') for rr in range(9, 93)}
+
+    def 차변성(계정):
+        k, g = 매핑.get(계정, ('BS', ''))
+        g = str(g or '').replace(' ', '')
+        return (g in _자산과목) if k == 'BS' else (g not in _KR수익과목)
+
+    # ── 전월 원장_raw 에서 손으로 넣은 Q · R · S · T 이어받기 (전표 · 계정 · 차 · 대 가 같은 줄)
+    W = wb['26년 원장_raw']
+    이어 = {}
+    for row in W.iter_rows(min_row=6, values_only=True):
+        if row[2] is not None and row[1]:
+            키 = (str(row[5]), str(row[1]).strip(), round(float(row[8] or 0), 0), round(float(row[9] or 0), 0))
+            이어[키] = row[16:20] if len(row) >= 20 else (None,) * 4
+
+    # ── 원장_raw 다시 쓰기 (머리 · 기초 · 거래 · 합계 줄의 서식 · 수식은 전월 줄에서)
+    tot = next(r for r in range(7, W.max_row + 1) if str(W.cell(r, 1).value or '').startswith('Total for'))
+    본 = {'머리': 6, '기초': 7, '거래': 8, '합계': tot}
+    모양 = {k: {c: _커_스타일(W.cell(r, c)) for c in range(1, 23)} for k, r in 본.items()}
+    수식 = {k: {c: W.cell(r, c).value for c in range(11, 23)
+               if isinstance(W.cell(r, c).value, str) and W.cell(r, c).value.startswith('=')} for k, r in 본.items()}
+    for rng in list(W.merged_cells.ranges):
+        if rng.min_row >= 6:
+            W.unmerge_cells(str(rng))
+    W.delete_rows(6, W.max_row)
+    W['A3'] = f'{연도}.01.01 ~ {끝날:%Y.%m.%d}   (F = 전표번호 월일-번호 · G = 전표 유형)'
+
+    def 쓰기(r, 종류, 값):
+        for c in range(1, 23):
+            _커_입히기(W.cell(r, c), 모양[종류].get(c))
+        for c, f in 수식[종류].items():
+            W.cell(r, c, _커_옮김(f, 본[종류], r, openpyxl.utils.get_column_letter(c)))
+        for c, v in 값.items():
+            W.cell(r, c, v)
+
+    이어받음 = 0
+    r = 6
+    for 계정 in sorted(set(d['계정']), key=lambda s: int(re.match(r'^\d+', s).group(0))):
+        c = 계정.split(' ', 1)[0]
+        x = d[d['계정'] == 계정].sort_values(['일자', '전표'], kind='stable')
+        쓰기(r, '머리', {1: 계정}); r += 1
+        잔 = float(기초.get(계정, 0.0)); 차성 = 차변성(계정)
+        쓰기(r, '기초', {2: 'Beginning Balance', 8: 잔}); r += 1
+        첫 = r
+        for _, y in x.iterrows():
+            잔 += (y['차'] - y['대']) if 차성 else (y['대'] - y['차'])
+            값 = {2: 계정, 3: y['일자'].to_pydatetime(),
+                  4: str(y['적요']) if pd.notna(y['적요']) else None,
+                  5: str(y['거래처명']) if pd.notna(y['거래처명']) else None,
+                  6: y['전표'], 7: str(y['유형']) if pd.notna(y['유형']) else None,
+                  8: round(잔, 0), 9: (y['차'] or None), 10: (y['대'] or None)}
+            옛 = 이어.get((y['전표'], 계정, round(y['차'], 0), round(y['대'], 0)))
+            if 옛 and any(v is not None for v in 옛):
+                for j, v in enumerate(옛):
+                    if v is not None:
+                        값[17 + j] = v
+                이어받음 += 1
+            elif c in _KR기본활동:
+                값[17] = _KR기본활동[c]; 값[18] = 계정.split(' ', 1)[1].replace('(판)', '')
+            쓰기(r, '거래', 값); r += 1
+        쓰기(r, '합계', {1: f'Total for {계정}', 8: round(잔, 0),
+                         9: f'=SUM(I{첫}:I{r - 1})', 10: f'=SUM(J{첫}:J{r - 1})'}); r += 1
+    W.auto_filter.ref = f'A5:V{r - 1}'
+    안내['이어받음'] = 이어받음
+
+    # ── 머리 글자 (기간)
+    말일 = f'{연도}년 {결산월:02d}월 {끝날.day:02d}일'
+    bs, is_ = wb['BS'], wb['IS']
+    bs['B2'] = re.sub(r'\d{4}년\s*\d{1,2}월\s*\d{1,2}일', 말일, str(bs['B2'].value or '')) or f'(당) : {말일} 현재'
+    is_['B2'] = re.sub(r'~\s*\d{4}\.\d{2}\.\d{2}', f'~{끝날:%Y.%m.%d}', str(is_['B2'].value or ''))
+    if '요약보고' in wb.sheetnames:
+        S = wb['요약보고']
+        for row in S.iter_rows(min_row=1, max_row=8):
+            for x in row:
+                if isinstance(x.value, str) and re.fullmatch(r'\d{1,2}월 누적', x.value.strip()):
+                    x.value = f'{결산월}월 누적'
+        # 3 · 4번 표에 없는 새 거래처 · 계정 — 표 합계 줄 비고가 2번 표와 차이를 보여 줌
+        있는 = {str(S.cell(rr, 2).value or '').strip() for rr in range(1, S.max_row + 1)}
+        _m = d[d['코드'].isin(['401', '404', '414'])]
+        새거래처 = sorted({str(n).strip() for n in _m['거래처명'].dropna()} - 있는)
+        _p = d[d['코드'].str.startswith('8')]
+        새과목 = sorted({str(매핑.get(n, ('', ''))[1]) for n in _p['계정']} - 있는)
+        if 새거래처:
+            안내['알림'].append('요약보고 3번 표에 없는 매출 거래처 : ' + ', '.join(새거래처) + ' — 줄을 추가해 주세요 (합계 줄 비고에 차이로 표시됨)')
+        if 새과목:
+            안내['알림'].append('요약보고 4번 표에 없는 판관비 과목 : ' + ', '.join(새과목) + ' — 줄을 추가해 주세요')
+    for w in wb:
+        w.sheet_view.showGridLines = False
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue(), 안내
+
+
 def 자료종류(바이트):
     """파일 안 시트 이름을 보고 어떤 자료인지 스스로 알아냅니다."""
     try:
@@ -7555,10 +7771,12 @@ def 자료종류(바이트):
         return '원장'                       # 퀵북 원장 원본
     if any(re.search(r'ledger|원장', s, re.I) for s in 시트):
         return '원장'
+    if any('분개장' in s for s in 시트) and 한국분개장인지(바이트):
+        return '원장'                       # 씨티케이커넥트 더존 분개장 (2026-11-03)
     return ''
 
 
-종류이름 = {'실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '원장': '원장 원본', '양식': '연결패키지 양식'}
+종류이름 = {'실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '한국분개장': '씨티케이커넥트 분개장 → 패키지로 변환', '원장': '원장 원본', '양식': '연결패키지 양식'}
 
 
 KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'      # 씨티케이커넥트(한국 법인) 연결패키지 자리
@@ -7579,8 +7797,41 @@ def 한국법인자료(바이트, 이름=''):
     return False
 
 
+def _KR패키지인가(바이트):
+    """연결패키지(「원장_raw」 시트가 든 파일)인지."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(바이트)) as z:
+            return '원장_raw' in z.read('xl/workbook.xml').decode('utf-8', 'ignore')
+    except Exception:
+        return False
+
+
+def KR분개장반영(바이트, 이름=''):
+    """더존 분개장 → 지금 있는 씨티케이커넥트 패키지를 전월 양식으로 삼아 새 패키지를 만들어 KR 자리에 둡니다 → (됨, 안내글)."""
+    도장 = (str(이름), len(바이트))
+    if st.session_state.get('_KR분개장도장') == 도장:
+        return True, st.session_state.get('_KR분개장안내', '')
+    전월, 전월이름 = _KR패키지바이트(분개장보기=False)
+    if not 전월:
+        return False, ('분개장만으로는 처음 패키지를 만들 수 없습니다 — 씨티케이커넥트 연결패키지(「…연결패키지_씨티케이커넥트_…」)를 '
+                       '한 번 올려 주시면, 그다음부터는 분개장만 올려도 됩니다.')
+    with st.spinner('분개장으로 씨티케이커넥트 패키지를 만드는 중입니다 (20~40초)...'):
+        결과, 안내 = KR패키지만들기(바이트, 전월)
+    연, 월 = 안내['연도'], 안내['결산월']
+    _m = re.search(rf'_{월}월말_v(\d+)', str(전월이름 or ''))
+    새이름 = f'{연}. {(월 - 1) // 3 + 1}Q_연결패키지_씨티케이커넥트_{월}월말_v{int(_m.group(1)) + 1 if _m else 1}.xlsx'
+    KR보관하기(결과, 새이름)
+    글 = (f'분개장 {안내["줄"]:,}줄 → 「{새이름}」 (양식 = {전월이름})'
+          + (f' · 새 계정 {len(안내["새계정"])}개는 BS_IS_매핑 확인 필요' if 안내['새계정'] else ''))
+    st.session_state['_KR분개장도장'] = 도장
+    st.session_state['_KR분개장안내'] = 글
+    return True, 글
+
+
 def KR보관하기(바이트, 이름):
     """씨티케이커넥트 패키지를 이 서버와 GitHub 자료 저장소에 남깁니다 (같은 파일이면 한 번만)."""
+    if not _KR패키지인가(바이트):          # 분개장 등 패키지가 아닌 파일은 두지 않음
+        return
     도장 = (str(이름), len(바이트))
     if st.session_state.get('_KR보관도장') == 도장:
         return
@@ -7599,12 +7850,20 @@ def KR보관하기(바이트, 이름):
         pass
 
 
-def _KR패키지바이트():
+def _KR패키지바이트(분개장보기=True):
     """씨티케이커넥트 연결패키지 → (바이트, 파일 이름). 방금 올린 것 → 자료실 가장 새 파일 → 마지막 보관 순."""
     _up = st.session_state.get('kr_pkg')
     if _up is not None:
-        KR보관하기(_up.getvalue(), _up.name)
-        return _up.getvalue(), _up.name
+        _b = _up.getvalue()
+        if _KR패키지인가(_b):
+            KR보관하기(_b, _up.name)
+            return _b, _up.name
+        if 분개장보기 and 한국분개장인지(_b):        # 분개장을 올리셨으면 패키지로 바꿔 KR 자리에 둠
+            try:
+                _됨, _글 = KR분개장반영(_b, _up.name)
+            except Exception as e:
+                _됨, _글 = False, f'분개장으로 패키지를 만들지 못했습니다 — {e}'
+            st.session_state['_KR올림안내'] = (_됨, _글)
     후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
             if '씨티케이커넥트' in os.path.basename(f) and '연결패키지' in os.path.basename(f)
             and not os.path.basename(f).startswith('~$')]
@@ -7623,6 +7882,8 @@ def _KR패키지바이트():
     if os.path.exists(KR보관):
         with open(KR보관, 'rb') as _f:
             _b = _f.read()
+        if not _KR패키지인가(_b):             # 예전에 분개장이 잘못 들어간 경우
+            return None, ''
         try:
             _n = open(KR이름표, encoding='utf-8').read().strip()
         except OSError:
@@ -7643,6 +7904,14 @@ def 자료받기(파일들):
         elif 종 == '실적':
             실적 = f
             _자리에쓰기(전월보관, 바이트, f.name)
+        elif 종 == '원장' and 한국분개장인지(바이트):      # 씨티케이커넥트 더존 분개장 → 패키지로 바꿔 KR 자리에
+            _자리에쓰기(원장보관, 바이트, f.name)
+            try:
+                _됨, _글 = KR분개장반영(바이트, f.name)
+            except Exception as e:
+                _됨, _글 = False, f'분개장으로 패키지를 만들지 못했습니다 — {e}'
+            st.session_state['_KR올림안내'] = (_됨, _글)
+            종 = '한국분개장'
         elif 종 == '원장':
             _자리에쓰기(원장보관, 바이트, f.name)
         elif 종 == '양식':
@@ -7732,7 +8001,7 @@ if 메뉴 == '실적보고 엑셀작성':
   </div></div>""")
     칸1, 칸2, 칸3 = st.columns(3, gap='small')
     with 칸1:
-        st.caption('① 퀵북 원장 (General Ledger · 필수)')
+        st.caption('① 퀵북 원장 (General Ledger) 또는 씨티케이커넥트 더존 분개장 · 필수')
         _gl = st.file_uploader('원장', type=['xlsx'], key='ctk_gl', label_visibility='collapsed')
         if _gl is not None:
             _자리에쓰기(원장보관, _gl.getvalue(), _gl.name)
@@ -7763,6 +8032,74 @@ if 메뉴 == '실적보고 엑셀작성':
             else:
                 _전월바이트, _전월이름 = None, ''
         st.caption(f'📁 {_전월이름}' if _전월바이트 else '자료실에 연결패키지가 없습니다 — 올려 주세요')
+
+    # ── 씨티케이커넥트 : ① 에 더존 분개장을 올리면 씨티케이커넥트 연결패키지를 만듭니다 (2026-11-03)
+    if _gl있음 and 한국분개장인지(보관바이트(원장보관)):
+        if _pv is not None and 한국법인자료(_pv.getvalue(), _pv.name):
+            _KR전월, _KR전월이름 = _pv.getvalue(), _pv.name
+        else:
+            _KR전월, _KR전월이름 = _KR패키지바이트()
+        st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:4px">
+          <h3>씨티케이커넥트 연결패키지 만들기 <span class="unitbadge">단위 원</span></h3>
+          <div class="sub">① 더존 분개장 「{_html.escape(str(_gl이름))}」 + ③ 전월 씨티케이커넥트 패키지
+            「{_html.escape(str(_KR전월이름 or '없음'))}」 → 「26년 원장_raw」 를 새 분개장으로 갈아 끼웁니다.
+            BS · IS · 요약보고 수식과 양식, BS_IS_매핑, 활동분류(같은 전표 줄)는 전월 패키지 것을 그대로 씁니다. 통장 파일 · 환율은 쓰지 않습니다.</div>
+        </div></div>""")
+        if not _KR전월:
+            st.info('③ 에 씨티케이커넥트 연결패키지(「…연결패키지_씨티케이커넥트_…」)를 올려 주세요.')
+            st.stop()
+        try:
+            _kd, _ = _KR분개장읽기(보관바이트(원장보관))
+        except Exception as e:
+            st.error(f'분개장을 읽지 못했습니다 — {e}')
+            st.stop()
+        _끝 = _kd['일자'].max()
+        _연, _결산월 = int(_끝.year), int(_끝.month)
+        _있는번호 = [int(m.group(1)) for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+                     for m in [re.search(rf'_연결패키지_씨티케이커넥트_{_결산월}월말_v(\d+)', os.path.basename(f))] if m]
+        _m2 = re.search(rf'_연결패키지_씨티케이커넥트_{_결산월}월말_v(\d+)', str(_KR전월이름 or ''))
+        if _m2:
+            _있는번호.append(int(_m2.group(1)))
+        _버1, _버2 = st.columns([1, 3.2], gap='small')
+        _버전 = _버1.number_input(f'{_결산월}월말 버전 번호', min_value=1, step=1, value=max(_있는번호 or [0]) + 1,
+                                  key=f'kr_ver_{_결산월}', help='기본값 = 같은 달 씨티케이커넥트 패키지의 마지막 번호 + 1')
+        _버2.caption(f'분개장 {_kd["일자"].min():%Y-%m-%d} ~ {_끝:%Y-%m-%d} · {len(_kd):,}줄 · 결산월 {_결산월}월 · '
+                     f'파일 이름 : 「…연결패키지_씨티케이커넥트_{_결산월}월말_v{int(_버전)}.xlsx」')
+        if st.button('⚙  씨티케이커넥트 연결패키지 만들기', type='primary', key='kr_make'):
+            try:
+                with st.spinner('씨티케이커넥트 연결패키지를 만드는 중입니다 (20~40초)...'):
+                    _결과, _안내 = KR패키지만들기(보관바이트(원장보관), _KR전월)
+            except Exception as e:
+                st.error(f'만들지 못했습니다 — {e}')
+                st.stop()
+            _q = (_결산월 - 1) // 3 + 1
+            _폴더 = os.path.join(자료실, f'{_연}년 {_결산월}월', '씨티케이커넥트')
+            _n = int(_버전)
+            _이름 = f'{_연}. {_q}Q_연결패키지_씨티케이커넥트_{_결산월}월말_v{_n}.xlsx'
+            while os.path.exists(os.path.join(_폴더, _이름)):        # 같은 이름이 있으면 덮어쓰지 않고 다음 번호
+                _n += 1
+                _이름 = f'{_연}. {_q}Q_연결패키지_씨티케이커넥트_{_결산월}월말_v{_n}.xlsx'
+            try:
+                os.makedirs(_폴더, exist_ok=True)
+                with open(os.path.join(_폴더, _이름), 'wb') as _f:
+                    _f.write(_결과)
+                _안내['저장'] = os.path.join(_폴더, _이름)
+            except OSError as e:
+                _안내['저장'] = f'저장 못 함 ({e})'
+            KR보관하기(_결과, _이름)          # 씨티케이커넥트 화면 · 웹 보관소에도 바로 반영
+            st.session_state['_KR결과'] = (_결과, _이름, _안내)
+        if st.session_state.get('_KR결과'):
+            _결과, _이름, _안내 = st.session_state['_KR결과']
+            _알림 = ''.join(f'<li>{_html.escape(a)}</li>' for a in _안내.get('알림', []))
+            _새 = ''.join(f'<li style="color:#C00000">새 계정 {_html.escape(a)} — BS_IS_매핑 확인 필요</li>' for a in _안내.get('새계정', []))
+            st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:4px">
+              <h3>만들었습니다 — {_html.escape(_이름)}</h3>
+              <div class="sub">분개장 {_안내['줄']:,}줄 · 전월에서 이어받은 활동분류 {_안내.get('이어받음', 0):,}줄 ·
+                저장 : {_html.escape(str(_안내.get('저장', '')))} · 엑셀에서 한 번 열어 저장하시면 수식 값이 채워집니다.</div>
+              <ul style="margin:8px 0 0; padding-left:18px">{_새}{_알림}</ul></div></div>""")
+            st.download_button('⤓  씨티케이커넥트 연결패키지 내려받기', data=_결과, file_name=_이름,
+                               mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', key='kr_down')
+        st.stop()
 
     if not _gl있음 or not _전월바이트:
         st.info('① 원장과 ③ 전월 연결패키지가 있어야 만들 수 있습니다.')
@@ -8353,6 +8690,9 @@ else:
 if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — 같은 화면을 씨티케이커넥트 연결패키지(KRW)로 그립니다
     법인 = '씨티케이커넥트'
     _kb, _kn = _KR패키지바이트()
+    _안 = st.session_state.get('_KR올림안내')
+    if _안:
+        (st.success if _안[0] else st.warning)(_안[1])
     if not _kb:
         st.html(f"""<div class="wrap" translate="no">
   <div class="page-head"><span class="t">실적보고 — 씨티케이커넥트</span><span class="pill">자료 없음</span></div>
@@ -8360,10 +8700,9 @@ if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — �
     <div style="font-size:15px; line-height:1.85; color:{T['ink2']}">
       씨티케이커넥트(한국 법인) 연결패키지가 아직 없습니다.<br>
       아래 상자에 <b style="color:{T['ink']}">「…연결패키지_씨티케이커넥트_○월말_v○.xlsx」</b> 를 올려 주세요.
+      한 번 올린 뒤에는 <b style="color:{T['ink']}">더존 분개장</b>만 올려도 그 패키지 양식으로 바꿔 보여 드립니다.
       PC 에서는 자료실 달 폴더의 「씨티케이커넥트」 하위 폴더에 넣어 두면 자동으로 읽습니다.</div></div></div>""")
-        st.file_uploader('씨티케이커넥트 연결패키지 (.xlsx)', type=['xlsx'], key='kr_pkg')
-        if st.session_state.get('kr_pkg') is not None:
-            st.rerun()
+        st.file_uploader('씨티케이커넥트 연결패키지 또는 더존 분개장 (.xlsx)', type=['xlsx'], key='kr_pkg')
         st.stop()
     데이터바이트, 쓰는파일 = _kb, _kn
     설정칸.caption(f'📁 씨티케이커넥트 자료: {_kn}')
