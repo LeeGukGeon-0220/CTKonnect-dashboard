@@ -4266,8 +4266,16 @@ def 커_원장읽기(바이트):
     d = d[d['일자'].notna() & d['Distribution account'].notna()].copy()
     d['계정'] = d['Distribution account'].astype(str).str.strip()
     d = d[~d['계정'].str.startswith(('Total', 'Beginning'))]
-    d['차'] = pd.to_numeric(d.get('Debit'), errors='coerce').fillna(0.0)
-    d['대'] = pd.to_numeric(d.get('Credit'), errors='coerce').fillna(0.0)
+    if 'Debit' not in d.columns and 'Credit' not in d.columns and 'Amount' in d.columns:
+        _금 = pd.to_numeric(d['Amount'], errors='coerce').fillna(0.0)      # 기본 General Ledger 양식 — 부호가 계정 성격을 따름
+        _계 = d['Distribution account'].astype(str).str.strip()
+        _번 = _계.str.extract(r'^(\d+)')[0].fillna('')
+        _대변성 = (_번.str[:1].isin(['2', '3']) | _번.str[:2].isin(['51', '53'])
+                   | (_번.eq('') & _계.str.contains(r'Payable|Equity|Income|Revenue|Earnings|Liabilit', case=False, regex=True)))
+        _차금 = _금.where(~_대변성, -_금)                                    # 차변 + 로 맞춤
+        d['Debit'], d['Credit'] = _차금.clip(lower=0), (-_차금).clip(lower=0)
+    d['차'] = pd.to_numeric(d['Debit'], errors='coerce').fillna(0.0) if 'Debit' in d.columns else 0.0
+    d['대'] = pd.to_numeric(d['Credit'], errors='coerce').fillna(0.0) if 'Credit' in d.columns else 0.0
     v = d['Vendor'] if 'Vendor' in d.columns else pd.Series([None] * len(d), index=d.index)
     c = d['Customer'] if 'Customer' in d.columns else pd.Series([None] * len(d), index=d.index)
     if 'Vendor' not in d.columns and 'Customer' not in d.columns and 'Name' in d.columns:
@@ -4280,6 +4288,12 @@ def 커_원장읽기(바이트):
     d['적요'] = memo.fillna('').astype(str).str.replace('\n', ' ') if memo is not None else ''
     d['TID'] = d.get('Transaction ID')
     d['Num'] = d['Num'] if 'Num' in d.columns else None
+    if 'Transaction ID' not in d.columns:      # 기본 양식 — 같은 날 · 같은 유형 · 같은 번호(번호가 없으면 같은 거래처)를 한 전표로
+        _글 = lambda s: s.fillna('').astype(str).str.strip() if s is not None else pd.Series([''] * len(d), index=d.index)
+        _유형, _번호 = _글(d.get('Transaction type')), _글(d['Num'] if 'Num' in d.columns else None)
+        _이름 = _글(d.get('Name'))
+        _키 = (d['일자'].dt.strftime('%Y%m%d') + '|' + _유형 + '|' + _번호 + '|' + _이름.where(_번호.eq(''), ''))
+        d['TID'] = (pd.factorize(_키)[0] + 1).astype(int)
     return d.reset_index(drop=True)
 
 
@@ -4350,6 +4364,7 @@ def _커_원장시트(W, g, 끝날, 매핑):
     """「26년 원장_raw」 — 계정 머리줄 → Beginning Balance → 거래 → Total for (퀵북 General Ledger List 모양)."""
     # 이전 달 행에서 손으로 넣은 활동분류(Q) · 활동세부(R) · S · T 이어받기
     이전 = {}
+    이전2 = {}
     배움 = {}
     for r in range(6, W.max_row + 1):
         b = W.cell(r, 2).value
@@ -4359,6 +4374,9 @@ def _커_원장시트(W, g, 끝날, 매핑):
               round(float(W.cell(r, 10).value or 0), 2))
         qrst = tuple(W.cell(r, c).value for c in (17, 18, 19, 20))
         이전[키] = qrst
+        _날 = W.cell(r, 3).value
+        if hasattr(_날, 'strftime') and any(qrst):       # 전표번호가 바뀌어도 (일자 · 계정 · 차 · 대) 로 이어받기
+            이전2.setdefault((_날.strftime('%Y%m%d'), 키[1], 키[2], 키[3]), qrst)
         if qrst[0]:
             배움[(str(b).strip(), 커_이름정리(W.cell(r, 5).value))] = qrst[:2]
     # 줄 모양 (머리 · 기초 · 거래 · 합계) 과 수식 — 지금 시트의 첫 계정 묶음에서 가져옵니다
@@ -4441,7 +4459,11 @@ def _커_원장시트(W, g, 끝날, 매핑):
                   6: y['TID'], 7: (None if pd.isna(y['Num']) else y['Num']) if 'Num' in y else None,
                   8: round(잔, 2), 9: (y['차'] or None), 10: (y['대'] or None)}
             키 = (_커_번호(y['TID']), a, round(float(y['차']), 2), round(float(y['대']), 2))
-            if 키 in 이전:
+            키2 = (y['일자'].strftime('%Y%m%d'), a, 키[2], 키[3])
+            if 키2 in 이전2:                  # 일자 · 계정 · 금액이 같은 줄 먼저 (전표번호 양식이 달라도 맞음)
+                q, rr, s_, t_ = 이전2[키2]
+                값.update({17: q, 18: rr, 19: s_, 20: t_})
+            elif 키 in 이전:
                 q, rr, s_, t_ = 이전[키]
                 값.update({17: q, 18: rr, 19: s_, 20: t_})
             elif IS:
@@ -5214,10 +5236,18 @@ def _커_이름채우기(g, W):
             continue
         이전[(_커_번호(W.cell(r, 6).value), str(b).strip(), round(float(W.cell(r, 9).value or 0), 2),
               round(float(W.cell(r, 10).value or 0), 2))] = n
+        _날 = W.cell(r, 3).value
+        if hasattr(_날, 'strftime'):
+            이전[('날' + _날.strftime('%Y%m%d'), str(b).strip(), round(float(W.cell(r, 9).value or 0), 2),
+                  round(float(W.cell(r, 10).value or 0), 2))] = n
     키 = [(_커_번호(t), a, round(float(dr), 2), round(float(cr), 2))
           for t, a, dr, cr in zip(g['TID'], g['계정'], g['차'], g['대'])]
-    g['거래처원'] = [n if n is not None and not (isinstance(n, float) and pd.isna(n)) else 이전.get(k)
-                     for n, k in zip(g['거래처원'], 키)]
+    키2 = [('날' + d_.strftime('%Y%m%d'), a, round(float(dr), 2), round(float(cr), 2))
+           for d_, a, dr, cr in zip(g['일자'], g['계정'], g['차'], g['대'])]
+    _기본양식 = 'Transaction ID' not in g.columns
+    g['거래처원'] = [n if n is not None and not (isinstance(n, float) and pd.isna(n))
+                     else (이전.get(k2) or (None if _기본양식 else 이전.get(k)))
+                     for n, k, k2 in zip(g['거래처원'], 키, 키2)]
     # ② 같은 전표 안에 거래처가 하나뿐이면 그 이름
     하나 = g.dropna(subset=['거래처원']).groupby(g['TID'].map(_커_번호))['거래처원'].agg(lambda s: s.iloc[0] if s.nunique() == 1 else None)
     빈2 = g['거래처원'].isna()
@@ -7420,6 +7450,70 @@ def 자료기록쓰기(이름, 누가):
     return 쪽지
 
 
+# 웹 서버가 새로 켜졌으면 「3. 웹사이트_업데이트」 가 잠가 올린 PC 자료실 최신 패키지(_웹자료)를 먼저 엽니다 (2026-11-04)
+# 웹자료 잠금 · 열기 (2026-11-04) — 파이썬 기본 기능만 씀 (HMAC-SHA256 카운터 방식 암호화 + HMAC 위변조 확인)
+import hmac as _hm, hashlib as _hs, os as _os, json as _js
+
+def _열쇠둘(열쇠):
+    k = 열쇠.encode('utf-8') if isinstance(열쇠, str) else 열쇠
+    return (_hm.new(k, b'ctk-enc', _hs.sha256).digest(), _hm.new(k, b'ctk-mac', _hs.sha256).digest())
+
+def _흐름(키, 난수, 길이):
+    out = bytearray()
+    n = 0
+    while len(out) < 길이:
+        out += _hm.new(키, 난수 + n.to_bytes(8, 'big'), _hs.sha256).digest()
+        n += 1
+    return bytes(out[:길이])
+
+def 잠그기(바이트, 이름, 열쇠):
+    ek, mk = _열쇠둘(열쇠)
+    평문 = _js.dumps({'이름': 이름}, ensure_ascii=False).encode('utf-8') + b'\n' + 바이트
+    난수 = _os.urandom(16)
+    s = _흐름(ek, 난수, len(평문))
+    암 = bytes(a ^ b for a, b in zip(평문, s))
+    몸 = b'CTK1' + 난수 + 암
+    return 몸 + _hm.new(mk, 몸, _hs.sha256).digest()
+
+def 열기(덩이, 열쇠):
+    ek, mk = _열쇠둘(열쇠)
+    몸, 표 = 덩이[:-32], 덩이[-32:]
+    if 몸[:4] != b'CTK1' or not _hm.compare_digest(_hm.new(mk, 몸, _hs.sha256).digest(), 표):
+        raise ValueError('열쇠가 맞지 않거나 파일이 손상되었습니다')
+    난수, 암 = 몸[4:20], 몸[20:]
+    평문 = bytes(a ^ b for a, b in zip(암, _흐름(ek, 난수, len(암))))
+    머리, 바이트 = 평문.split(b'\n', 1)
+    return 바이트, _js.loads(머리.decode('utf-8'))['이름']
+
+
+def 웹자료열기():
+    열쇠 = _보관설정('data_key')
+    if not 열쇠 or not os.path.isdir('_웹자료'):
+        return
+    for 파일, 둘곳, 둘이름 in (('CTKonnect.enc', CACHE_PATH, 이름기록),
+                               ('씨티케이커넥트.enc', '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt')):
+        p = os.path.join('_웹자료', 파일)
+        if not os.path.exists(p):
+            continue
+        if os.path.exists(둘곳) and os.path.getmtime(둘곳) >= os.path.getmtime(p):
+            continue                      # 이 서버에서 그 뒤에 올린 자료가 있으면 그대로
+        try:
+            with open(p, 'rb') as f:
+                바이트, 이름 = 열기(f.read(), 열쇠)
+            with open(둘곳, 'wb') as f:
+                f.write(바이트)
+            with open(둘이름, 'w', encoding='utf-8') as f:
+                f.write(이름)
+        except Exception:
+            pass
+
+
+if not os.path.isdir('자료실'):            # 웹(자료실 폴더가 없음)에서만 — PC 는 자료실을 바로 읽음
+    try:
+        웹자료열기()
+    except Exception:
+        pass
+    자료있음 = os.path.exists(CACHE_PATH)
 # 웹 서버가 새로 켜졌으면 GitHub 자료 저장소에서 두 법인 마지막 파일을 먼저 내려받습니다 (2026-11-03)
 if not 자료있음 or not os.path.exists('최근업로드_KR.xlsx'):
     try:
@@ -8267,10 +8361,28 @@ if 메뉴 == '실적보고 엑셀작성':
     _결산월 = 선1.selectbox('결산월', _달들, index=_달들.index(_기본달) if _기본달 in _달들 else len(_달들) - 1,
                             format_func=lambda m: f'{m}월', key='ctk_month',
                             help=f'원장 마지막 날 {_g["일자"].max():%Y-%m-%d} · 기본값 = 원장 파일 이름의 「○월결산」(없으면 매출이 잡힌 마지막 달)')
-    _월말 = 선2.number_input(f'{_결산월}월말 환율 (원/USD)', min_value=0.0, value=0.0, step=0.01, format='%.2f', key='ctk_fx1',
-                             help='서울외국환중개 매매기준율 — 0 이면 전월 값 그대로 둡니다')
-    _평균 = 선3.number_input(f'1~{_결산월}월 평균환율 (원/USD)', min_value=0.0, value=0.0, step=0.01, format='%.2f', key='ctk_fx2',
-                             help='0 이면 전월 값 그대로 둡니다')
+    _환율자리 = os.path.join(보관폴더, '환율기록.json')
+    try:
+        with open(_환율자리, encoding='utf-8') as _f:
+            _환율기록 = json.load(_f)
+    except Exception:
+        _환율기록 = {}
+    _환율키 = f'{_g["일자"].max().year}-{int(_결산월):02d}'
+    _기본월말, _기본평균 = (_환율기록.get(_환율키) or [0.0, 0.0])[:2]
+    _월말 = 선2.number_input(f'{_결산월}월말 환율 (원/USD)', min_value=0.0, value=float(_기본월말 or 0.0), step=0.01, format='%.2f',
+                             key=f'ctk_fx1_{_환율키}',
+                             help='서울외국환중개 매매기준율 — 한 번 넣으면 이 달은 계속 그 값을 씁니다 · 0 이면 전월 값 그대로')
+    _평균 = 선3.number_input(f'1~{_결산월}월 평균환율 (원/USD)', min_value=0.0, value=float(_기본평균 or 0.0), step=0.01, format='%.2f',
+                             key=f'ctk_fx2_{_환율키}',
+                             help='한 번 넣으면 이 달은 계속 그 값을 씁니다 · 0 이면 전월 값 그대로')
+    if (_월말 or _평균) and [_월말, _평균] != (_환율기록.get(_환율키) or [None, None])[:2]:
+        _환율기록[_환율키] = [_월말 or _기본월말 or 0.0, _평균 or _기본평균 or 0.0]
+        try:
+            os.makedirs(보관폴더, exist_ok=True)
+            with open(_환율자리, 'w', encoding='utf-8') as _f:
+                json.dump(_환율기록, _f, ensure_ascii=False)
+        except OSError:
+            pass
     with 선4:
         st.caption('올리는 곳')
         st.radio('올리는 곳', ['씨티케이커넥트', 'CTKonnect'], key='올린곳_작성', index=None,
@@ -8925,15 +9037,25 @@ if 메뉴 == '연결 손익계산서':
     for z in 구역:                # 과목이 따로 없는 구역(법인세비용 등)은 구역 이름 자체가 과목
         if not z[2]:
             z[2] = [z[0]]
+        if z[0] == '매출액':     # 상품매출 바로 아래에 수수료 매출 두 줄 (CTKonnect 중개 · IOR)
+            _i = z[2].index('상품매출') + 1 if '상품매출' in z[2] else 0
+            z[2][_i:_i] = [x for x in ('상품수수료매출(중개)', 'IOR매출') if x not in z[2]]
     계산줄 = {'매출총이익', '영업이익', '법인세비용차감전계속사업이익', '계속사업이익', '당기순이익(손실)', '중단사업이익', '기타포괄손익'}
     수익구역 = {'매출액', '기타수익', '금융수익', '지분법손익'}
 
+    def _과목열(d):
+        """과목 이름 — CTKonnect 원장의 51103 중개매출 · 51104 IOR매출은 용역매출에서 떼어 따로 보여 줍니다."""
+        과 = d['계정과목'].astype(str).str.replace(' ', '')
+        if '계정영문' in d.columns:
+            코 = d['계정영문'].astype(str).str.strip()
+            과 = 과.mask(코.str.startswith('51103'), '상품수수료매출(중개)').mask(코.str.startswith('51104'), 'IOR매출')
+        return 과
     def _과목금액(원장, 배수):
         """과목별 1~끝월 누적 — 수익은 +, 비용은 + (표시용) · 외환 · 환산손익은 순액으로 이익/손실 칸에 나눔."""
         if 원장 is None:
             return {}
         d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)]
-        합 = d.groupby(d['계정과목'].astype(str).str.replace(' ', ''))['금액'].sum() * 배수     # 대변 − 차변
+        합 = d.groupby(_과목열(d))['금액'].sum() * 배수     # 대변 − 차변
         o = {}
         for k, v in 합.items():
             o[k] = o.get(k, 0.0) + float(v)
@@ -8953,7 +9075,7 @@ if 메뉴 == '연결 손익계산서':
         d = d[n.apply(lambda s: any(k.upper() in s for k in 상대이름))].copy()
         d['법인'] = 법인
         d['환산'] = d['금액'] * 배수
-        d['과목'] = d['계정과목'].astype(str).str.replace(' ', '')
+        d['과목'] = _과목열(d)
         return d
     IC = pd.concat([_내부(US원장, 한국이름, 'CTKonnect', US배수), _내부(KR원장, 미국이름, '씨티케이커넥트', KR배수)])
     차변, 대변, 비고 = {}, {}, {}
@@ -9026,6 +9148,12 @@ if 메뉴 == '연결 손익계산서':
             if any(abs(x) >= 0.5 for x in v) and 과 != 이름:
                 자식.append((과, 1, *v, 비고.get(과, '')))
         구역합[이름] = 합
+        if 이름 == '판매비와관리비' and len(자식) > 8:          # 금액 큰 7개 + 기타 (기타를 누르면 나머지가 금액순으로)
+            자식.sort(key=lambda z: -abs(z[6]))
+            남은 = 자식[7:]
+            기타합 = [sum(z[i] for z in 남은) for i in range(2, 7)]
+            자식 = (자식[:7] + [(f'기타 ({len(남은)}개)', 'etc', *기타합, '')]
+                    + [(z[0], 'sga', *z[2:]) for z in 남은])
         if any(abs(x) >= 0.5 for x in 합) or 이름 in ('매출액', '매출원가', '판매비와관리비'):
             줄들.append((이름, 0, *합, 비고.get(이름, '') if 목 == [이름] else ''))
             줄들.extend(자식)
@@ -9055,19 +9183,40 @@ if 메뉴 == '연결 손익계산서':
     몸 = ''
     for 이름, 수준, u, k, 차, 대, 연, 비 in 줄들:
         st_ = ' style="font-weight:700; background:rgba(127,127,127,.07)"' if 이름 in 굵게 else (' style="font-weight:700"' if 수준 == 0 else '')
-        몸 += (f'<tr{st_}><td class="lft">{"&nbsp;&nbsp;&nbsp;" * 수준}{_html.escape(이름)}</td><td>{_칸(u)}</td>'
+        if 수준 == 'etc':
+            st_, 이름칸 = ' class="csetc"', ('&nbsp;&nbsp;&nbsp;<label for="cs-etc" class="cstog">' + _html.escape(이름)
+                                         + ' <span class="cscaret">▸</span></label>')
+        elif 수준 == 'sga':
+            st_, 이름칸 = ' class="cssga"', '&nbsp;' * 7 + _html.escape(이름)
+        else:
+            이름칸 = "&nbsp;&nbsp;&nbsp;" * 수준 + _html.escape(이름)
+        몸 += (f'<tr{st_}><td class="lft">{이름칸}</td><td>{_칸(u)}</td>'
                f'<td>{_칸(k) if KR원장 is not None else "-"}</td><td>{_칸(u + k)}</td>'
-               f'<td>{_칸(차)}</td><td>{_칸(대)}</td><td><b>{_칸(연)}</b></td>'
+               f'<td class="adj">{_칸(차)}</td><td class="adj">{_칸(대)}</td><td><b>{_칸(연)}</b></td>'
                f'<td class="lft" style="font-weight:400; color:{"#C00000" if "가정" in 비 else T["ink3"]}">{_html.escape(비)}</td></tr>')
     st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
       <h3>연결 손익계산서 — {US연도}년 1~{끝월}월 누적 <span class="unitbadge">단위 {단위}</span></h3>
       <div class="sub">평균환율 {환율:,.2f} 원/USD · {'CTKonnect(USD)를 원화로 환산' if 원화 else '씨티케이커넥트(KRW)를 달러로 환산'} ·
         합계 = 두 법인 단순합산 · 연결조정 = 두 법인 사이 거래(내부거래) 제거 · 연결재무 = 합계 ∓ 연결조정</div>
-      <div class="scrollx"><table class="lined" style="width:100%; min-width:1080px">
-        <colgroup><col style="width:17%"><col style="width:11%"><col style="width:11%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:11%"><col style="width:19%"></colgroup>
+      <style>
+        .wrap table.consotab th.adj {{ background:#DCEBFB !important; color:#1F3A5F !important; }}
+        .wrap table.consotab td.adj {{ background:#F2F8FE; }}
+        .wrap table.consotab th:last-child {{ background:{T['navy']}; }}
+        .wrap table.consotab td:last-child {{ background:transparent; font-weight:400; white-space:normal; }}
+        .wrap table.consotab tr.cssga {{ display:none; }}
+        .wrap table.consotab tr.cssga td {{ color:{T['ink2']}; }}
+        .wrap input#cs-etc {{ display:none; }}
+        .wrap input#cs-etc:checked ~ .scrollx table.consotab tr.cssga {{ display:table-row; }}
+        .wrap label.cstog {{ cursor:pointer; }}
+        .wrap label.cstog .cscaret {{ display:inline-block; color:{T['accent']}; margin-left:3px; transition:transform .15s; }}
+        .wrap input#cs-etc:checked ~ .scrollx label.cstog .cscaret {{ transform:rotate(90deg); }}
+      </style>
+      <input type="checkbox" id="cs-etc">
+      <div class="scrollx"><table class="lined consotab" style="width:auto; max-width:100%; table-layout:fixed">
+        <colgroup><col style="width:190px"><col style="width:118px"><col style="width:118px"><col style="width:118px"><col style="width:108px"><col style="width:108px"><col style="width:118px"><col style="width:250px"></colgroup>
         <thead><tr><th class="lft" rowspan="2">과목</th><th rowspan="2">CTKonnect</th><th rowspan="2">씨티케이커넥트</th><th rowspan="2">합계</th>
-          <th colspan="2">연결조정</th><th rowspan="2">연결재무</th><th rowspan="2">비고</th></tr>
-          <tr><th>차변</th><th>대변</th></tr></thead>
+          <th colspan="2" class="adj">연결조정</th><th rowspan="2">연결재무</th><th rowspan="2">비고</th></tr>
+          <tr><th class="adj">차변</th><th class="adj">대변</th></tr></thead>
         <tbody>{몸}</tbody></table></div>{가정글}
       {'' if not 빠진 else f'<div class="sub" style="color:#C00000; margin-top:6px">IS 과목표에 없는 과목이 있어 표에 넣지 못했습니다 : {" · ".join(빠진)} — BS_IS_매핑 확인 필요</div>'}
       {'' if KR원장 is not None else ('<div class="sub" style="margin-top:8px">' + (('씨티케이커넥트 연결패키지를 읽지 못했습니다 — ' + _html.escape(KR오류)) if KR오류 else '씨티케이커넥트 연결패키지가 아직 없어 CTKonnect 만 들어 있습니다 — 위 「씨티케이커넥트 연결패키지 올리기」 에서 올려 주세요.') + ' 내부거래는 두 법인 자료가 다 있을 때 지웁니다.</div>')}
