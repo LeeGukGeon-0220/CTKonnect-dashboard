@@ -167,7 +167,7 @@ html, body,
     color: {T['ink']};
     padding-top: 1.6rem !important; padding-bottom: 2.5rem !important;
     padding-left: 0.9rem !important; padding-right: 1.2rem !important;
-    max-width: none !important; }}
+    max-width: 1600px !important; margin-left: 0 !important; margin-right: auto !important; }}
 /* 오른쪽 위 Streamlit 메뉴(점 세 개 ⋮)는 다시 보이게 둡니다 — 공유·인쇄·설정이 거기 있습니다.
    맨 위 무지개 줄만 감추고, 머리줄은 배경 없이 띄워 화면은 그대로 깔끔하게 둡니다. */
 [data-testid="stDecoration"] {{ display: none !important; }}
@@ -413,6 +413,7 @@ h1, h2, h3, h4 {{ color: {T['headink']} !important; font-weight: 800 !important;
   .wrap table.fixed {{ border:none; }}
   .wrap table.fixed th {{ text-align:center; }}
   .wrap table.fixed td.name {{ text-align:left; }}   /* 머리칸은 가운데 */
+  .wrap table.lined tr.rv td.name {{ padding-left:16px !important; }}   /* 매출 · 원가 세부 — 살짝 들여쓰기 (2026-11-04) */
   .wrap table.fixed th.name, .wrap table.fixed td.name {{ width:210px; }}
   .wrap table.fixed th.grp {{ padding-bottom:6px; }}
   /* 셋트 경계선 */
@@ -6771,6 +6772,9 @@ def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
     당월 실적집계·대시보드 화면에서 공통으로 씁니다."""
     if 대상 is None or 대상.empty:
         return '<div class="muted">해당 기간에 거래가 없습니다.</div>'
+    대상 = 대상.copy()
+    대상['Name'] = 대상['Name'].map(lambda n: re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip()
+                                    if n is not None and not (isinstance(n, float) and pd.isna(n)) else n)
     집계 = (대상.groupby(대상['Name'].fillna('(거래처 미기재)'))[값컬럼].sum() * 부호)
     집계 = 집계[집계.abs() > 0.5].sort_values(ascending=False)
     if 집계.empty:
@@ -6785,6 +6789,23 @@ def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
     if abs(기타합) > 0.5:
         줄 += (f'<tr><td class="lft">기타 ({len(집계) - 상위N}곳 합계)</td>'
                f'<td>{금액(기타합)}</td><td class="muted">{기타합 / 총액 * 100:,.1f}%</td></tr>')
+    if '_구분' in 대상.columns and 대상['_구분'].nunique() > 1:      # 대분류(매출구분) → 소분류(거래처)
+        _g = 대상.assign(_n=대상['Name'].fillna('(거래처 미기재)'))
+        _구합 = (_g.groupby('_구분')[값컬럼].sum() * 부호)
+        _구합 = _구합[_구합.abs() > 0.5].sort_values(ascending=False)
+        줄 = ''
+        for _구, _v in _구합.items():
+            줄 += (f'<tr style="font-weight:700; background:rgba(127,127,127,.06)"><td class="lft">{_html.escape(str(_구))}</td>'
+                   f'<td>{금액(float(_v))}</td><td>{float(_v) / 총액 * 100:,.1f}%</td></tr>')
+            _거 = (_g[_g['_구분'].eq(_구)].groupby('_n')[값컬럼].sum() * 부호)
+            _거 = _거[_거.abs() > 0.5].sort_values(ascending=False)
+            for _n, _w in _거.iloc[:상위N].items():
+                줄 += (f'<tr><td class="lft notranslate" translate="no" style="padding-left:16px">{_html.escape(str(_n))}</td>'
+                       f'<td>{금액(float(_w))}</td><td class="muted">{float(_w) / 총액 * 100:,.1f}%</td></tr>')
+            if len(_거) > 상위N:
+                _r = float(_거.iloc[상위N:].sum())
+                줄 += (f'<tr><td class="lft" style="padding-left:16px">기타 ({len(_거) - 상위N}곳)</td>'
+                       f'<td>{금액(_r)}</td><td class="muted">{_r / 총액 * 100:,.1f}%</td></tr>')
     줄 += (f'<tr style="font-weight:700"><td class="lft">합계</td>'
            f'<td>{금액(float(집계.sum()))}</td><td>100.0%</td></tr>')
     # ── 거래 내용 : 거래처마다 「무슨 거래인지」 + 월별 금액 ─────────────
@@ -9006,8 +9027,8 @@ if 메뉴 == '연결 손익계산서':
     except Exception:
         _기본환율 = 0.0
     c1, c2, c3 = st.columns([1.2, 1, 2.4], gap='small')
-    통화선택 = c1.radio('보여 줄 통화', ['원화 (KRW)', '달러 (USD)'], horizontal=True, key='conso_ccy')
-    환율 = c2.number_input('평균환율 (원/USD)', min_value=0.0, value=round(_기본환율, 2), step=0.01, format='%.2f', key='conso_fx',
+    통화선택 = '원화 (KRW)'      # 2026-11-04 : 연결재무는 원화 · CTKonnect 는 USD 와 원화 환산을 나란히
+    환율 = c1.number_input('평균환율 (원/USD)', min_value=0.0, value=round(_기본환율, 2), step=0.01, format='%.2f', key='conso_fx',
                           help='기본값 = CTKonnect 연결패키지 IS 시트 M5 (1~결산월 평균환율)')
     원화 = 통화선택.startswith('원화')
     단위 = 'KRW' if 원화 else 'USD'
@@ -9106,9 +9127,8 @@ if 메뉴 == '연결 손익계산서':
                     쓸 = min(v, 한도); 한도 -= 쓸
                     짝 = 원가짝.get(k, '상품매출원가')
                     대변[짝] = 대변.get(짝, 0.0) + 쓸
-                    비고[짝] = f'「가정」 내부매출과 같은 금액을 매출원가에서 지움 (재고에 남은 내부이익은 그대로)'
                     가정들.append(f'{판매} → {구매} 내부매출 {k} {쓸:,.0f}')
-        if 가정들:
+        if False:
             가정글 = ('<div class="sub" style="color:#C00000; font-weight:700; margin-top:8px">「가정」 '
                       + ' · '.join(가정들) + ' 은 사는 법인 원장에서 상대 이름으로 매출원가를 찾지 못해, 내부매출과 같은 금액을 '
                       '매출원가에서 지웠습니다. 사는 법인 재고(상품 · 미착품 · 선급금)에 아직 남은 물건의 내부이익은 빼지 않았습니다 — '
@@ -9117,6 +9137,42 @@ if 메뉴 == '연결 손익계산서':
             가정글 += '<div class="sub" style="color:#C00000; margin-top:4px">' + ' · '.join(확인들) + '</div>'
         for k in set(차변) | set(대변):
             비고.setdefault(k, '내부거래 제거')
+
+    # 외환 · 환산 손익 — 비고에 무슨 돈인지 짧게 (원장 적요 · 금액에서 바로 뽑음)
+    def _외환메모():
+        메 = {}
+        for 원장, 법, 통 in ((US원장, 'CTK', 'USD'), (KR원장, '커넥트', 'KRW')):
+            if 원장 is None:
+                continue
+            d = 원장[원장['계정분류'].eq('IS') & 원장['월'].between(1, 끝월)].copy()
+            d['과'] = d['계정과목'].astype(str).str.replace(' ', '')
+            for 묶음, 이익, 손실 in ((('외환차손익', '외환차익', '외환차손'), '외환차익', '외환차손'),
+                                   (('외화환산손익', '외화환산이익', '외화환산손실'), '외화환산이익', '외화환산손실')):
+                x = d[d['과'].isin(묶음)]
+                if x.empty or abs(float(x['금액'].sum())) < 0.5:
+                    continue
+                n = float(x['금액'].sum())            # 대변 − 차변 : + 이익 · − 손실
+                칸 = 이익 if n > 0 else 손실
+                손 = -float(x.loc[x['금액'] < 0, '금액'].sum()); 익 = float(x.loc[x['금액'] > 0, '금액'].sum())
+                if len(x) == 1:
+                    r = x.iloc[0]
+                    적 = re.sub(r'\s+', ' ', str(r.get('Description') or '')).strip()
+                    거 = re.sub(r'\s*\((Vendor|Customer|Customers)\)\s*$', '', str(r.get('Name') or '')).strip()
+                    거 = '' if 거.lower() in ('nan', 'none') else 거
+                    글 = (f'{법} {r["거래일"].month}/{r["거래일"].day}' + (f' {거}' if 거 else '') + (f' · {적[:22]}' if 적 and 적 != 'nan' else '')
+                          + f' {"$" if 통 == "USD" else ""}{abs(n):,.0f}{"" if 통 == "USD" else "원"}')
+                elif 손 >= 0.5 and 익 >= 0.5:
+                    _말 = ('차손', '차익') if '외환' in 이익 else ('환산손실', '환산이익')
+                    _큰 = x.loc[x['금액'].abs().idxmax()]
+                    _큰적 = re.sub(r'\s+', ' ', str(_큰.get('Description') or '')).strip()
+                    글 = (f'{법} {_말[0]} {손:,.0f} − {_말[1]} {익:,.0f} ({len(x)}건 순액'
+                          + (f' · 큰 건 {_큰["거래일"].month}/{_큰["거래일"].day} {_큰적[:16]}' if _큰적 and _큰적 != 'nan' else '') + ')')
+                else:
+                    글 = f'{법} {len(x)}건 합계'
+                메.setdefault(칸, []).append(글)
+        return {k: ' / '.join(v) for k, v in 메.items()}
+    for k, v in _외환메모().items():
+        비고[k] = (비고[k] + ' · ' if 비고.get(k) else '') + v
 
     def _칸(v):
         if v is None or pd.isna(v) or abs(v) < 0.5:
@@ -9135,6 +9191,8 @@ if 메뉴 == '연결 손익계산서':
         연 = (u + k - 차 + 대) if 수익 else (u + k + 차 - 대)
         return u, k, 차, 대, 연
     쓴과목 = set()
+    영업외구역 = {'기타수익', '기타비용', '금융수익', '금융비용', '지분법손익'}
+    영업외토글 = []
     for 이름, _, 목 in 구역:
         if 이름 in 계산줄:
             continue
@@ -9154,7 +9212,13 @@ if 메뉴 == '연결 손익계산서':
             기타합 = [sum(z[i] for z in 남은) for i in range(2, 7)]
             자식 = (자식[:7] + [(f'기타 ({len(남은)}개)', 'etc', *기타합, '')]
                     + [(z[0], 'sga', *z[2:]) for z in 남은])
-        if any(abs(x) >= 0.5 for x in 합) or 이름 in ('매출액', '매출원가', '판매비와관리비'):
+        if 이름 in 영업외구역 and 자식:                         # 영업외손익 — 누르면 세부가 펼쳐짐
+            _n = f'o{len(영업외토글) + 1}'
+            if any(abs(x) >= 0.5 for x in 합):
+                영업외토글.append(_n)
+                줄들.append((이름, f'hd:{_n}', *합, ''))
+                줄들.extend((z[0], f'hc:{_n}', *z[2:]) for z in 자식)
+        elif any(abs(x) >= 0.5 for x in 합) or 이름 in ('매출액', '매출원가', '판매비와관리비'):
             줄들.append((이름, 0, *합, 비고.get(이름, '') if 목 == [이름] else ''))
             줄들.extend(자식)
         # 계산줄은 해당 구역 뒤에 끼움
@@ -9188,19 +9252,35 @@ if 메뉴 == '연결 손익계산서':
                                          + ' <span class="cscaret">▸</span></label>')
         elif 수준 == 'sga':
             st_, 이름칸 = ' class="cssga"', '&nbsp;' * 7 + _html.escape(이름)
+        elif str(수준).startswith('hd:'):
+            _n = 수준[3:]
+            st_, 이름칸 = ' style="font-weight:700"', (f'<label for="cs-{_n}" class="cstog">' + _html.escape(이름)
+                                                    + f' <span class="cscaret cc-{_n}">▸</span></label>')
+        elif str(수준).startswith('hc:'):
+            st_, 이름칸 = f' class="cssub cs-{수준[3:]}"', '&nbsp;' * 4 + _html.escape(이름)
         else:
             이름칸 = "&nbsp;&nbsp;&nbsp;" * 수준 + _html.escape(이름)
-        몸 += (f'<tr{st_}><td class="lft">{이름칸}</td><td>{_칸(u)}</td>'
+        몸 += (f'<tr{st_}><td class="lft">{이름칸}</td><td class="usd">{_칸(u / 환율 if 환율 > 0 else 0)}</td><td class="krw">{_칸(u)}</td>'
                f'<td>{_칸(k) if KR원장 is not None else "-"}</td><td>{_칸(u + k)}</td>'
                f'<td class="adj">{_칸(차)}</td><td class="adj">{_칸(대)}</td><td><b>{_칸(연)}</b></td>'
                f'<td class="lft" style="font-weight:400; color:{"#C00000" if "가정" in 비 else T["ink3"]}">{_html.escape(비)}</td></tr>')
     st.html(f"""<div class="wrap" translate="no"><div class="card" style="margin-top:10px">
       <h3>연결 손익계산서 — {US연도}년 1~{끝월}월 누적 <span class="unitbadge">단위 {단위}</span></h3>
-      <div class="sub">평균환율 {환율:,.2f} 원/USD · {'CTKonnect(USD)를 원화로 환산' if 원화 else '씨티케이커넥트(KRW)를 달러로 환산'} ·
+      <div class="sub">평균환율 {환율:,.2f} 원/USD · CTKonnect 는 USD 장부 금액과 원화 환산을 나란히 · 연결재무는 원화 ·
         합계 = 두 법인 단순합산 · 연결조정 = 두 법인 사이 거래(내부거래) 제거 · 연결재무 = 합계 ∓ 연결조정</div>
       <style>
         .wrap table.consotab th.adj {{ background:#DCEBFB !important; color:#1F3A5F !important; }}
         .wrap table.consotab td.adj {{ background:#F2F8FE; }}
+        .wrap table.consotab td + td, .wrap table.consotab tbody td + td {{ border-left:1px solid #C9CED6; }}
+        .wrap table.consotab thead th {{ border-left:1px solid rgba(255,255,255,.22); }}
+        .wrap table.consotab td:last-child {{ font-size:12px; line-height:1.35; border-left:1px solid #C9CED6; }}
+        .wrap table.consotab tbody tr:last-child td {{ border-bottom:none; }}
+        .wrap table.consotab thead th:first-child {{ border-left:none; }}
+        .wrap table.consotab th.usdg {{ background:#FCEBD2 !important; color:#7A4A12 !important; border-bottom:1px solid #F1D3A8; }}
+        .wrap table.consotab th.usd, .wrap table.consotab th.krw {{ background:#FDF3E3 !important; color:#7A4A12 !important; font-size:12px; }}
+        .wrap table.consotab td.usd {{ background:#FFFAF2; color:#7A4A12; }}
+        .wrap table.consotab th.krw, .wrap table.consotab td.krw {{ border-right:2px solid #EFD9B8; }}
+        .wrap table.consotab th .cur {{ display:block; font-size:10.5px; font-weight:600; opacity:.75; margin-top:2px; }}
         .wrap table.consotab th:last-child {{ background:{T['navy']}; }}
         .wrap table.consotab td:last-child {{ background:transparent; font-weight:400; white-space:normal; }}
         .wrap table.consotab tr.cssga {{ display:none; }}
@@ -9209,15 +9289,22 @@ if 메뉴 == '연결 손익계산서':
         .wrap input#cs-etc:checked ~ .scrollx table.consotab tr.cssga {{ display:table-row; }}
         .wrap label.cstog {{ cursor:pointer; }}
         .wrap label.cstog .cscaret {{ display:inline-block; color:{T['accent']}; margin-left:3px; transition:transform .15s; }}
-        .wrap input#cs-etc:checked ~ .scrollx label.cstog .cscaret {{ transform:rotate(90deg); }}
+        .wrap input#cs-etc:checked ~ .scrollx label[for="cs-etc"] .cscaret {{ transform:rotate(90deg); }}
+        .wrap table.consotab tr.cssub {{ display:none; }}
+        .wrap table.consotab tr.cssub td {{ color:{T['ink2']}; }}
+        .wrap input.cschk {{ display:none; }}
+        {''.join(f'.wrap input#cs-{n}:checked ~ .scrollx table.consotab tr.cs-{n} {{ display:table-row; }} '
+                 f'.wrap input#cs-{n}:checked ~ .scrollx .cc-{n} {{ transform:rotate(90deg); }} ' for n in 영업외토글)}
       </style>
-      <input type="checkbox" id="cs-etc">
-      <div class="scrollx"><table class="lined consotab" style="width:auto; max-width:100%; table-layout:fixed">
-        <colgroup><col style="width:190px"><col style="width:118px"><col style="width:118px"><col style="width:118px"><col style="width:108px"><col style="width:108px"><col style="width:118px"><col style="width:250px"></colgroup>
-        <thead><tr><th class="lft" rowspan="2">과목</th><th rowspan="2">CTKonnect</th><th rowspan="2">씨티케이커넥트</th><th rowspan="2">합계</th>
-          <th colspan="2" class="adj">연결조정</th><th rowspan="2">연결재무</th><th rowspan="2">비고</th></tr>
-          <tr><th class="adj">차변</th><th class="adj">대변</th></tr></thead>
-        <tbody>{몸}</tbody></table></div>{가정글}
+      <input type="checkbox" id="cs-etc">{''.join(f'<input type="checkbox" class="cschk" id="cs-{n}">' for n in 영업외토글)}
+      <div class="scrollx" style="border:1px solid #AEB4BE; border-radius:10px; padding-bottom:0"><table class="lined consotab" style="width:100%; table-layout:fixed; margin:0">
+        <colgroup><col style="width:190px"><col style="width:104px"><col style="width:118px"><col style="width:118px"><col style="width:118px"><col style="width:108px"><col style="width:108px"><col style="width:118px"><col style="width:230px"></colgroup>
+        <thead><tr><th class="lft" rowspan="2">과목</th><th colspan="2" class="usdg">CTKonnect</th>
+          <th rowspan="2">씨티케이커넥트<span class="cur">KRW</span></th><th rowspan="2">합계<span class="cur">KRW</span></th>
+          <th colspan="2" class="adj">연결조정 <span style="font-size:10.5px; font-weight:600; opacity:.75">KRW</span></th>
+          <th rowspan="2">연결재무<span class="cur">KRW</span></th><th rowspan="2">비고</th></tr>
+          <tr><th class="usd">USD</th><th class="krw">원화 환산<span class="cur">× {환율:,.2f}</span></th><th class="adj">차변</th><th class="adj">대변</th></tr></thead>
+        <tbody>{몸}</tbody></table></div>
       {'' if not 빠진 else f'<div class="sub" style="color:#C00000; margin-top:6px">IS 과목표에 없는 과목이 있어 표에 넣지 못했습니다 : {" · ".join(빠진)} — BS_IS_매핑 확인 필요</div>'}
       {'' if KR원장 is not None else ('<div class="sub" style="margin-top:8px">' + (('씨티케이커넥트 연결패키지를 읽지 못했습니다 — ' + _html.escape(KR오류)) if KR오류 else '씨티케이커넥트 연결패키지가 아직 없어 CTKonnect 만 들어 있습니다 — 위 「씨티케이커넥트 연결패키지 올리기」 에서 올려 주세요.') + ' 내부거래는 두 법인 자료가 다 있을 때 지웁니다.</div>')}
       <div class="sub" style="margin-top:6px">CTKonnect : {_html.escape(str(쓰는파일 or ''))}{(' · 씨티케이커넥트 : ' + _html.escape(KR파일)) if KR파일 else ''}</div>
@@ -9230,7 +9317,10 @@ if 메뉴 == '연결 손익계산서':
         with st.expander(f'내부거래 내역 — 두 법인 사이 손익 거래 {len(IC)}줄', expanded=False):
             st.html(f"""<div class="wrap" translate="no"><div class="card">
               <div class="sub">손익 계정 줄 중 거래처가 상대 법인(한국 : {' · '.join(한국이름)} / 미국 : CTKonnect, Inc.)인 줄 · 금액 = 이익(+) · 비용(−) · 단위 {단위}</div>
-              <div class="scrollx"><table class="lined" style="width:100%; min-width:820px">
+              <style>.wrap table.ictab td, .wrap table.ictab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
+                .wrap table.ictab td:last-child {{ background:transparent; }}</style>
+              <div class="scrollx"><table class="lined ictab" style="width:100%; table-layout:fixed">
+                <colgroup><col style="width:120px"><col style="width:96px"><col style="width:120px"><col style="width:120px"><col style="width:420px"><col style="width:124px"></colgroup>
                 <thead><tr><th class="lft">법인</th><th>일자</th><th class="lft">계정</th><th class="lft">거래처</th><th class="lft">적요</th><th>금액</th></tr></thead>
                 <tbody>{줄}</tbody></table></div></div></div>""")
     st.stop()
@@ -9383,9 +9473,11 @@ def 상품채권html(원장, 기준일):
       <div class="card" style="margin-top:14px"><h3>상품매출 미수채권 Aging — 건별 <span class="unitbadge">단위 USD</span></h3>
         <div class="sub">상품매출(51101)이 잡힌 전표의 매출채권 청구만 · 청구액 = 마켓 수수료를 뺀 정산액 · 회수는 거래처별 오래된 청구부터 ·
           만기 = 청구한 달의 다음 달 말일 · 경과일 = 만기에서 {기준일:%Y-%m-%d} 까지 · 남은 미수 : {구간글}</div>
-        <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed;">
-          <colgroup><col style="width:9%"><col style="width:15%"><col style="width:9%"><col style="width:9%"><col style="width:9%">
-            <col style="width:9%"><col style="width:6%"><col style="width:6%"><col style="width:8%"><col style="width:20%"></colgroup>
+        <style>.wrap table.cmptab td, .wrap table.cmptab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
+          .wrap table.cmptab thead th {{ padding-top:7px !important; padding-bottom:7px !important; }}</style>
+        <div class="scrollx"><table class="lined cmptab" style="width:100%; table-layout:fixed;">
+          <colgroup><col style="width:92px"><col style="width:130px"><col style="width:84px"><col style="width:84px"><col style="width:84px">
+            <col style="width:84px"><col style="width:58px"><col style="width:56px"><col style="width:84px"><col style="width:300px"></colgroup>
           <thead><tr><th>청구일</th><th>거래처</th><th>상품매출</th><th>청구액</th><th>회수</th><th>미수</th><th>만기</th>
             <th>경과일</th><th>구간</th><th>적요</th></tr></thead>
           <tbody>{몸}</tbody></table></div>
@@ -9843,9 +9935,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 for 이름, 값들 in 세부}
 
     def 행(이름, 값들, 굵게=False, 들여=0, 부호표시=False, 색='', 산식='', 예상=None, 강조=False,
-           숨김=False, 토글=False):
+           숨김=False, 토글=False, 살짝=False):
         cls = (' class="total hl"' if 강조 else ' class="total"' if 굵게
-               else (' class="sub sga"' if 숨김 else ' class="sub"' if 들여 else ''))
+               else (' class="sub sga"' if 숨김 else ' class="sub rv"' if 살짝 else ' class="sub"' if 들여 else ''))
         def f(v):
             if abs(v * 배율 / 표시나눔) < 0.5:   # 반올림하면 0 이 되는 금액은 '-' 로
                 return '-'
@@ -9928,25 +10020,42 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             매입L = [float(_총['중개매입'].get(m, 0.0)) for m in monthsX]
             대납L = [float(_총['IOR대납'].get(m, 0.0)) for m in monthsX]
             rows = 행('매출액 (총액 · 거래액)', [매출L[i] + 매입L[i] + 대납L[i] for i in range(len(monthsX))], True)
-            rows += 행('상품수수료매출 (중개)', [중개L[i] + 매입L[i] for i in range(len(monthsX))], 들여=1)
-            rows += 행('IOR매출', [IORL[i] + 대납L[i] for i in range(len(monthsX))], 들여=1)
-            rows += 행('상품매출', 상품L, 들여=1)
+            rows += 행('상품수수료매출 (중개)', [중개L[i] + 매입L[i] for i in range(len(monthsX))], 들여=1, 살짝=True)
+            rows += 행('IOR매출', [IORL[i] + 대납L[i] for i in range(len(monthsX))], 들여=1, 살짝=True)
+            rows += 행('상품매출', 상품L, 들여=1, 살짝=True)
             rows += 행('매출원가 (총액)', [원가L[i] + 매입L[i] + 대납L[i] for i in range(len(monthsX))], True)
-            rows += 행('중개 매입대금', 매입L, 들여=1)
-            rows += 행('IOR 대납 물류 · 통관비', 대납L, 들여=1)
-            rows += 행('상품매출원가', 원가L, 들여=1)
+            rows += 행('중개매출원가', 매입L, 들여=1, 살짝=True, 산식='중개 매입대금')
+            rows += 행('IOR매출원가', 대납L, 들여=1, 살짝=True, 산식='대납 물류 · 통관비')
+            rows += 행('상품매출원가', 원가L, 들여=1, 살짝=True, 산식='상품매출')
         else:
             rows = 행('매출액', 매출L, True, 예상=예상매출)
             if 법인 == '씨티케이커넥트':        # 한국 법인 : 계정과목별 매출 줄
                 for _n in ('제품매출', '상품매출', '용역매출', '기타매출'):
                     _v = 월별(IS['계정과목'].astype(str).eq(_n))
                     if any(abs(x) > 0.5 for x in _v):
-                        rows += 행(_n, _v, 들여=1)
+                        rows += 행(_n, _v, 들여=1, 살짝=True)
+                rows += 행('매출원가', 원가L, True, 예상=예상원가)
+                _쓴 = [0.0] * len(monthsX)
+                for _n in ('제품매출원가', '상품매출원가', '용역매출원가', '기타매출원가'):
+                    _v = 월별(IS['계정과목'].astype(str).eq(_n), -1)
+                    if any(abs(x) > 0.5 for x in _v):
+                        rows += 행(_n, _v, 들여=1, 살짝=True, 산식=_n.replace('원가', ''))
+                        _쓴 = [a + b for a, b in zip(_쓴, _v)]
+                _남 = [원가L[i] - _쓴[i] for i in range(len(monthsX))]
+                if any(abs(x) > 0.5 for x in _남):
+                    rows += 행('기타 원가', _남, 들여=1, 살짝=True)
             else:
-                rows += 행('상품수수료매출 (중개)', 중개L, 들여=1)
-                rows += 행('IOR매출', IORL, 들여=1)
-                rows += 행('상품매출', 상품L, 들여=1)
-            rows += 행('매출원가', 원가L, 예상=예상원가)
+                rows += 행('상품수수료매출 (중개)', 중개L, 들여=1, 살짝=True)
+                rows += 행('IOR매출', IORL, 들여=1, 살짝=True)
+                rows += 행('상품매출', 상품L, 들여=1, 살짝=True)
+                rows += 행('매출원가', 원가L, True, 예상=예상원가)
+                _0 = [0.0] * len(monthsX)
+                rows += 행('중개매출원가', _0, 들여=1, 살짝=True, 산식='원가 없음')
+                rows += 행('IOR매출원가', _0, 들여=1, 살짝=True, 산식='원가 없음')
+                rows += 행('상품매출원가', 상품원가L, 들여=1, 살짝=True, 산식='상품매출')
+                _남 = [원가L[i] - 상품원가L[i] for i in range(len(monthsX))]
+                if any(abs(x) > 0.5 for x in _남):
+                    rows += 행('기타 원가', _남, 들여=1, 살짝=True)
         rows += 행('매출총이익', 총이익L, True, 예상=예상총이익)
         # 판관비 합계는 SR&ED 차감 전, SR&ED 는 따로 한 줄 (2026-10-27 요청)
         rows += 행('판관비 합계', 판관L, True, 예상=예상판관, 토글=True)
@@ -10025,8 +10134,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         #   · 출금·회수는 원장 실적에서 뽑은 가정으로 화면이 직접 계산합니다(예상현금모형).
         #   · 「26년 자금」 3번 표(담당자가 손으로 채우는 칸)에 값이 있으면 그 줄·그 달은
         #     담당자 값으로 갈아 끼웁니다 — 담당자가 넣은 숫자가 언제나 우선입니다.
-        자금예상월 = list(range(보고월 + 1, 19))          # 다음 해 6월(18)까지 (2026-11-03 · 모든 법인 같게)
-        예상, 가정 = 예상현금모형(매출L, 원가L, 판관L, 상각L, 자금표, 보고월, 끝월=18)
+        자금예상월 = list(range(보고월 + 1, 16))          # 다음 해 3월(15)까지 (2026-11-04 요청 · 두 법인 같게)
+        예상, 가정 = 예상현금모형(매출L, 원가L, 판관L, 상각L, 자금표, 보고월, 끝월=15)
 
         def 달이름(m):
             return f'{m}월' if m <= 12 else f'{m - 12}월'
@@ -10099,7 +10208,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         자금콜그룹 = (f'<colgroup><col style="width:{자금이름비율:.4f}%">'
                       + f'<col style="width:{자금숫자비율:.4f}%">' * 자금칸수 + '</colgroup>')
         자금표스타일 = 'class="lined cfcomp" style="width:100%; table-layout:fixed;"'
-        자금최소폭 = 자금표너비              # 이보다 좁으면 그림과 표를 같이 옆으로 밀어 봅니다
+        자금최소폭 = max(자금표너비, 118 + 88 * 자금칸수)   # 옆으로 밀어 보는 막대가 생기게 (2026-11-04) · 앞 「구분」 칸은 틀고정
 
         자금rows = ''
         for 국문, 깊이, 값들, 굵게 in 자금줄:
@@ -10302,21 +10411,28 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             for i, v in enumerate(잔액K))
         표시 += (f'<div class="ctag" style="left:{기초x:.4f}%; '
                  f'top:{세로(잔액K[0]):.4f}%">기초</div>')
+        def 눈금글(t):
+            v = float(t) * (표시나눔 if 통화 == 'KRW' else 1)
+            if abs(v) < 1e-9:
+                return '0'
+            if 통화 == 'KRW':
+                return (f'{v / 1e8:,.1f}'.rstrip('0').rstrip('.') + '억') if abs(v) >= 1e8 else (f'{v / 1e4:,.0f}만')
+            return (f'{v / 1e6:,.1f}'.rstrip('0').rstrip('.') + 'M') if abs(v) >= 1e6 else (f'{v / 1e3:,.0f}K')
         눈금 = ''.join(
             f'<div class="cgrid{" zero" if abs(t) < 1e-9 else ""}" '
             f'style="left:{왼끝:.4f}%; width:{오른끝 - 왼끝:.4f}%; top:{세로(t):.4f}%"></div>'
             f'<div class="cylab" style="width:calc({왼끝:.4f}% - 20px); '
-            f'top:{세로(t):.4f}%">{t:,.0f}</div>'
+            f'top:{세로(t):.4f}%">{눈금글(t)}</div>'
             for t in 눈금값)
         축 = (f'<div class="cdomain" style="left:{왼끝:.4f}%"></div>'
               f'<div class="cbase" style="left:{왼끝:.4f}%; '
               f'width:{오른끝 - 왼끝:.4f}%; top:{세로(축낮):.4f}%"></div>')
-        꺾은선 = (f'<div class="cashcap"><span class="t">월말 현금성 자산</span>'
+        꺾은선머리 = (f'<div class="cashcap"><span class="t">월말 현금성 자산</span>'
                   f'<span class="u">기초 {CK(기초현금)} → {보고월}월 말 '
                   f'{CK(기말[-1])} {단위K}'
                   + (f' → {달표(자금예상월[-1])} 말 (예상) {CK(예상기말[-1])} {단위K}' if 예상기말 else '')
-                  + '</span></div>'
-                  f'<div class="cashline">'
+                  + '</span></div>')
+        꺾은선 = (f'<div class="cashline">'
                   f'{눈금}{축}{구간}{표시}</div>')
 
         예상글 = (f'{달표(자금예상월[0])} ~ {달표(자금예상월[-1])}' if 자금예상월 else '')
@@ -10370,6 +10486,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           늘고 줄었는지 나눴습니다 · 「실적 누적」 = 1~{보고월}월 실제 합계 (기초 · 기말은 1월 초 · {보고월}월 말 잔액){예상안내}</div>
         <style>
           .wrap .cfcard {{ container-type:inline-size; }}
+          .wrap .cfcard .cfin {{ container-type:inline-size; }}
           .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:clamp(10.5px, 0.74cqw, 15px); padding-left:1px !important; padding-right:clamp(3px, 0.3cqw, 7px) !important;
               padding-top:clamp(5px, 0.42cqw, 9px) !important; padding-bottom:clamp(5px, 0.42cqw, 9px) !important; letter-spacing:-0.2px; }}
           .wrap table.cfcomp thead th {{ font-size:clamp(10.5px, 0.7cqw, 14px); }}
@@ -10379,6 +10496,12 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap .cfcard .cashline .cylab, .wrap .cfcard .cashline .ctag {{ font-size:clamp(11px, 0.68cqw, 13.5px); }}
           .wrap .cfcard .cfsum {{ font-size:clamp(13px, 0.8cqw, 15px); }}
           .wrap table.cfcomp td.name {{ white-space:nowrap; padding-left:6px !important; }}
+          .wrap table.cfcomp th:first-child, .wrap table.cfcomp td:first-child {{ position:sticky; left:0; z-index:3;
+              box-shadow:2px 0 0 {T['grid']}; }}
+          .wrap table.cfcomp td:first-child {{ background:#FFFFFF; }}
+          .wrap table.cfcomp tr.total td:first-child {{ background:#F4F6FA; }}
+          .wrap table.cfcomp th:first-child {{ background:{T['navy']}; }}
+          .wrap .cfcard .scrollx {{ scrollbar-width:auto; padding-bottom:8px; }}
           .wrap table.cfcomp tr.sub td.name {{ padding-left:clamp(20px, 1.6cqw, 30px) !important; }}
 
           .wrap table.cfcomp td.cum {{ background:{T['navysoft']}; font-weight:700; }}
@@ -10388,7 +10511,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap table.cfcomp td:last-child {{ font-weight:400; color:{T['ink2']}; }}
           .wrap table.cfcomp tr.total td:last-child {{ font-weight:800; color:{T['ink']}; filter:none; }}
         </style>
-        <div class="scrollx"><div style="min-width:{자금최소폭}px">
+        {꺾은선머리}
+        <div class="scrollx"><div class="cfin" style="min-width:{자금최소폭}px">
         {꺾은선}
         <table {자금표스타일}>{자금콜그룹}<thead><tr><th>구분</th>
         <th class="cum">실적 누적<br><span class="fcs">1~{보고월}월</span></th>
@@ -10396,8 +10520,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         {''.join(f'<th class="fc">{달이름(m)}<br><span class="fcs">{"예상" if m <= 12 else f"{(당해연도 + 1) % 100}년 예상"}</span></th>' for m in 자금예상월)}
         </tr></thead>
         <tbody>{자금rows}</tbody></table></div></div>
-        {가정html}
-        {고변html}</div></div>"""
+        <div class="cfin">{가정html}
+        {고변html}</div></div></div>"""
 
     경고 = ''
     if False and 미분류건수:     # 실적보고 화면에서는 숨김 — 「데이터 점검」 에서만 표시 (2026-10-27)
@@ -10454,11 +10578,19 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     손익조건, 손익부호 = 항목조건_손익(손익골라본)
     _당월만 = 손익기간 == '당월'
     _세부자료 = 누적IS[손익조건]
+    if 손익골라본 == '매출액' and len(_세부자료):      # 매출구분(대분류) → 거래처(소분류)
+        _세부자료 = _세부자료.copy()
+        if 법인 == 'CTKonnect' and '계정영문' in _세부자료.columns:
+            _c = _세부자료['계정영문'].astype(str).str.strip()
+            _세부자료['_구분'] = np.select([_c.str.startswith('51103'), _c.str.startswith('51104'), _c.str.startswith('51101')],
+                                         ['상품수수료매출 (중개)', 'IOR매출', '상품매출'], '기타 매출')
+        else:
+            _세부자료['_구분'] = _세부자료['계정과목'].astype(str)
     if _당월만:
         _세부자료 = _세부자료[_세부자료['월'].eq(보고월X)]
     손익세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {단위K}</span></h3>
-        <div class="sub">{연도X}년 {f'{보고월X}월 (당월)' if _당월만 else f'1~{보고월X}월 누적'} · 거래처별 · 상위 7곳 + 기타</div>
+        <div class="sub">{연도X}년 {f'{보고월X}월 (당월)' if _당월만 else f'1~{보고월X}월 누적'} · {'매출구분 → 거래처별' if 손익골라본 == '매출액' else '거래처별 · 상위 7곳 + 기타'}</div>
         {세부패널(_세부자료, '금액', 손익부호).replace('>누적 금액<', '>당월 금액<' if _당월만 else '>누적 금액<')}</div></div>"""
     손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (연결패키지 요약보고 4번 표)'
                      if 총액보기 else ' · <b>순액 기준</b> (장부 매출)')
@@ -11144,37 +11276,43 @@ elif 메뉴 == '미수채권 관리':
     st.html(kpi)
 
     # ── 거래처별 채권 연령표 (금액이 큰 곳부터)
-    구간합 = {c: float(나이표[c].sum()) for c in 채권구간}
-    머리 = ''.join(f'<th>{c}</th>' for c in 채권구간)
-    합계줄 = ''.join(f'<td>{금액(구간합[c])}</td>' for c in 채권구간)
+    _표구간 = [('만기 전', ['within Due']), ('90일 이내', ['~30', '~60', '~90']), ('90일 이상', ['~120', '121~'])]
+    for _이름, _원 in _표구간:
+        나이표[_이름] = 나이표[_원].sum(axis=1)
+    표칸 = [n for n, _ in _표구간]
+    구간합 = {c: float(나이표[c].sum()) for c in 표칸}
+    머리 = ''.join(f'<th>{c}</th>' for c in 표칸)
+    합계줄 = ''.join(f'<td>{금액(구간합[c])}</td>' for c in 표칸)
     줄들 = ''
     기초색 = f' style="color:{T["ink3"]}"'
     _순서 = ['상품수수료매출 (중개)', 'IOR매출', '상품매출', '기타 매출', '기타 (대납비용 청구 · 이자 등)']
     for 구 in sorted(나이표['매출구분'].unique(), key=lambda g: _순서.index(g) if g in _순서 else 9):
         묶음 = 나이표[나이표['매출구분'] == 구].sort_values('채권총액', ascending=False)
         줄들 += (f'<tr class="total"><td class="lft">{_html.escape(구)}</td>'
-                 + ''.join(f'<td>{금액(float(묶음[c].sum()))}</td>' for c in 채권구간)
+                 + ''.join(f'<td>{금액(float(묶음[c].sum()))}</td>' for c in 표칸)
                  + f'<td><b>{금액(float(묶음["채권총액"].sum()))}</b></td><td></td></tr>')
         for _i, 행 in 묶음.iterrows():
-            칸 = ''.join(f'<td>{금액(float(행[c]))}</td>' for c in 채권구간)
+            칸 = ''.join(f'<td>{금액(float(행[c]))}</td>' for c in 표칸)
             이름꼴 = 기초색 if str(행['거래처명']).startswith('기초채권') else ''
             줄들 += ('<tr class="sub"><td class="lft"' + 이름꼴 + '>&nbsp;&nbsp;&nbsp;'
                      + _html.escape(str(행['거래처명'])) + '</td>' + 칸
                      + '<td><b>' + 금액(float(행['채권총액'])) + '</b></td><td></td></tr>')
     st.html(f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>매출구분 · 거래처별 채권 연령표 <span class="unitbadge">단위 USD</span></h3>
-        <div class="sub">매출구분 = 그 청구 전표의 매출 계정 (상품수수료매출(중개) · IOR매출 · 상품매출) · 구분 안에서는 채권총액이 큰 곳부터 · 만기 = 매출한 달의 다음 달 말일 ·
-          경과일은 만기일에서 {기준일.date()} 까지</div>
-        <div class="stick"><table class="lined" style="min-width:980px; margin-top:8px">
-          <colgroup><col style="width:24%">{'<col style="width:9.5%">' * 6}
-            <col style="width:11%"><col style="width:8%"></colgroup>
+        <style>
+          .wrap table.agetab td, .wrap table.agetab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
+          .wrap table.agetab thead th {{ padding-top:7px !important; padding-bottom:7px !important; }}
+        </style>
+        <div class="stick"><table class="lined agetab" style="width:100%; table-layout:fixed; margin-top:8px">
+          <colgroup><col style="width:230px">{'<col style="width:112px">' * 3}
+            <col style="width:120px"><col style="width:96px"></colgroup>
           <thead><tr><th>매출구분 / 거래처</th>{머리}<th>채권총액</th><th>대손충당금</th></tr></thead>
           <tbody>{줄들}
             <tr class="total"><td class="lft">합계</td>{합계줄}
               <td><b>{금액(총미수)}</b></td><td></td></tr>{''.join(
                 f'<tr class="sub"><td class="lft" style="color:{T["ink3"]}">{_html.escape(str(k))} — 초과입금 (선수)</td>'
-                + '<td></td>' * len(채권구간) + f'<td>{금액(-v)}</td><td></td></tr>' for k, v in _초과.items())}{(
-                f'<tr class="total"><td class="lft">장부 매출채권</td>' + '<td></td>' * len(채권구간)
+                + '<td></td>' * len(표칸) + f'<td>{금액(-v)}</td><td></td></tr>' for k, v in _초과.items())}{(
+                f'<tr class="total"><td class="lft">장부 매출채권</td>' + '<td></td>' * len(표칸)
                 + f'<td><b>{금액(_장부계산)}</b></td><td></td></tr>') if _초과 else ''}</tbody></table></div>
         <div class="calcnote"><b>어떻게 셌나</b> — 거래처마다 올해 청구(매출채권 차변)를 날짜순으로 쌓아 두고,
           들어온 돈(대변)으로 <b>오래된 것부터</b> 지웠습니다. 남은 청구만 만기일 기준으로 칸을 나눴습니다.<br>
@@ -11198,8 +11336,10 @@ elif 메뉴 == '미수채권 관리':
         st.html(f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card" style="margin-top:14px"><h3>미수수익 — 지연이자 등 아직 받지 않은 이자 <span class="unitbadge">단위 USD</span></h3>
         <div class="sub">원장 미수수익 계정 · {보고월}월 말 잔액 <b>{금액(_잔)}</b> · 거래처별 : {_거글 or '-'} · 매출채권 연령표에는 들어가지 않습니다</div>
-        <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed;">
-          <colgroup><col style="width:12%"><col style="width:18%"><col style="width:14%"><col style="width:56%"></colgroup>
+        <style>.wrap table.cmptab td, .wrap table.cmptab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
+          .wrap table.cmptab thead th {{ padding-top:7px !important; padding-bottom:7px !important; }}</style>
+        <div class="scrollx"><table class="lined cmptab" style="width:100%; table-layout:fixed;">
+          <colgroup><col style="width:100px"><col style="width:140px"><col style="width:100px"><col style="width:460px"></colgroup>
           <thead><tr><th>일자</th><th>거래처</th><th>금액</th><th>내용</th></tr></thead>
           <tbody>{_줄}<tr class="total"><td class="lft" colspan="2">합계 (잔액)</td><td>{금액(_잔)}</td><td></td></tr></tbody></table></div>
       </div></div>""")
