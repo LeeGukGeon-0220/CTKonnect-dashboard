@@ -9243,8 +9243,8 @@ def 상품채권html(원장, 기준일):
       </div></div>"""
 
 
-대출한도_확인 = {k: float(v) for k, v in dict(_비밀값('loan_limit', {})).items()}     # 대출 한도 — 담당자 확인 (Secrets)
-대출기초_확인 = {k: float(v) for k, v in dict(_비밀값('loan_opening', {})).items()}   # 25년 말 차입 잔액 — 사용자 확인 (Secrets) · 대출금 표에만 씀
+대출한도_확인 = {k: float(v) for k, v in dict(_비밀값('loan_limit', {'Shinhan Bank America': 12_700_000.0})).items()}     # 대출 한도 — 담당자 확인 (2026-10-29)
+대출기초_확인 = {k: float(v) for k, v in dict(_비밀값('loan_opening', {'CTK USA Holdings Corp': 100_000.0})).items()}     # 25년 말 차입 잔액 — 사용자 확인 · 대출금 표에만 씀
 
 
 def 대출금html(원장, 보고월, 전년=None, 기초보정=None, 한도보정=None, 기초설명=None, 통화='USD'):
@@ -10295,13 +10295,22 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                      help='원가 기준 = 재고수불부의 직접재료비 · 외주가공비 + 원장의 생산직 급여 · 제조 상각 '
                           '(당해 · 손익계산서 비용일 때만 고를 수 있습니다)')
     with 손익선택칸:
-        손익골라본 = st.selectbox('계정과목', 드릴목록_손익, key='dash_pl_drill',
-                                 help=f'고른 항목의 {연도X}년 1~{보고월X}월 누적 금액을 거래처별로 보여줍니다')
+        _골1, _골2 = st.columns([2.6, 1.4], gap='small')
+        with _골1:
+            손익골라본 = st.selectbox('계정과목', 드릴목록_손익, key='dash_pl_drill',
+                                     help='고른 항목의 금액을 거래처별로 보여줍니다')
+        with _골2:
+            손익기간 = st.radio('기간', ['당월', '누적'], index=0, horizontal=True, key='dash_pl_drill_period',
+                                help=f'당월 = {보고월X}월만 · 누적 = 1~{보고월X}월')
     손익조건, 손익부호 = 항목조건_손익(손익골라본)
+    _당월만 = 손익기간 == '당월'
+    _세부자료 = 누적IS[손익조건]
+    if _당월만:
+        _세부자료 = _세부자료[_세부자료['월'].eq(보고월X)]
     손익세부html = f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {단위K}</span></h3>
-        <div class="sub">{연도X}년 1~{보고월X}월 누적 · 거래처별 · 상위 7곳 + 기타</div>
-        {세부패널(누적IS[손익조건], '금액', 손익부호)}</div></div>"""
+        <div class="sub">{연도X}년 {f'{보고월X}월 (당월)' if _당월만 else f'1~{보고월X}월 누적'} · 거래처별 · 상위 7곳 + 기타</div>
+        {세부패널(_세부자료, '금액', 손익부호).replace('>누적 금액<', '>당월 금액<' if _당월만 else '>누적 금액<')}</div></div>"""
     손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (연결패키지 요약보고 4번 표)'
                      if 총액보기 else ' · <b>순액 기준</b> (장부 매출)')
                     + (f' · <b>{예상월들[0]}~{예상월들[-1]}월(예상)</b> 은 실적이 아니라 '
