@@ -7507,9 +7507,15 @@ def 열기(덩이, 열쇠):
     return 바이트, _js.loads(머리.decode('utf-8'))['이름']
 
 
+웹자료문제 = ''
 def 웹자료열기():
+    global 웹자료문제
+    if not os.path.isdir('_웹자료'):
+        return
     열쇠 = _보관설정('data_key')
-    if not 열쇠 or not os.path.isdir('_웹자료'):
+    if not 열쇠:
+        웹자료문제 = ('웹사이트 Secrets 에 data_key 가 없어 PC 의 최종 패키지를 열지 못했습니다 — '
+                     '「7. 웹 Secrets 붙여넣기용.txt」 내용을 Streamlit 앱 Settings → Secrets 에 그대로 붙여 넣어 주세요.')
         return
     for 파일, 둘곳, 둘이름 in (('CTKonnect.enc', CACHE_PATH, 이름기록),
                                ('씨티케이커넥트.enc', '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt')):
@@ -7525,16 +7531,19 @@ def 웹자료열기():
                 f.write(바이트)
             with open(둘이름, 'w', encoding='utf-8') as f:
                 f.write(이름)
-        except Exception:
-            pass
+        except Exception as e:
+            웹자료문제 = (f'PC 의 최종 패키지({파일})를 열지 못했습니다 — {e}. '
+                         '웹사이트 Secrets 의 data_key 가 PC .streamlit/secrets.toml 의 data_key 와 같은지 확인해 주세요.')
 
 
-if not os.path.isdir('자료실'):            # 웹(자료실 폴더가 없음)에서만 — PC 는 자료실을 바로 읽음
+if os.name != 'nt':                       # 웹(리눅스 서버)에서는 늘 — PC(윈도우)는 자료실을 바로 읽음 (2026-11-09)
     try:
         웹자료열기()
     except Exception:
         pass
     자료있음 = os.path.exists(CACHE_PATH)
+    if 웹자료문제:
+        st.warning('⚠ ' + 웹자료문제)
 # 웹 서버가 새로 켜졌으면 GitHub 자료 저장소에서 두 법인 마지막 파일을 먼저 내려받습니다 (2026-11-03)
 if not 자료있음 or not os.path.exists('최근업로드_KR.xlsx'):
     try:
@@ -10858,6 +10867,24 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             if _c과:
                 _쓴원가.add(_c과)
             _줄들.append((_과, float(_v), float(_내합.get(_과, 0.0)), _c))
+        _총액표 = False
+        _거래처원가 = {}                       # (매출구분, 거래처) → 원가 (전표에서 바로 알 수 있을 때만)
+        _이름 = lambda n: re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip()
+        if 법인 == 'CTKonnect' and 'TransactionID' in 당해원장.columns:
+            _w = 당해원장[당해원장['월'].le(보고월)].copy()
+            _wc = _w['계정영문'].astype(str).str.strip()
+            _수 = _w[_wc.str.startswith('51103') | _wc.str.startswith('51104')].copy()
+            if len(_수):
+                _총액표 = True
+                _수['구'] = np.where(_수['계정영문'].astype(str).str.strip().str.startswith('51103'), '상품수수료매출(중개)', 'IOR매출')
+                _대 = _w[(_wc.str.startswith('11801') | _wc.str.startswith('21201')) & _w['TransactionID'].isin(_수['TransactionID'])]
+                _전표원가 = (_대['Credit'].fillna(0) - _대['Debit'].fillna(0)).groupby(_대['TransactionID']).sum()
+                _전표 = _수.groupby('TransactionID').agg(구=('구', 'first'), 거=('Name', 'first'))
+                _전표['원가'] = _전표원가.reindex(_전표.index).fillna(0.0)
+                for (_구, _거), _v in _전표.groupby(['구', '거'])['원가'].sum().items():
+                    _거래처원가[(_구, _이름(_거))] = _거래처원가.get((_구, _이름(_거)), 0.0) + float(_v)
+                _더할 = _전표.groupby('구')['원가'].sum().to_dict()
+                _줄들 = [(_과, _v + _더할.get(_과, 0.0), _내, _c + _더할.get(_과, 0.0)) for _과, _v, _내, _c in _줄들]
         _남원가 = float(_원합[[i for i in _원합.index if i not in _쓴원가]].sum())
         if abs(_남원가) >= 0.5:
             _줄들.append(('기타 매출원가', 0.0, 0.0, _남원가))
@@ -10866,26 +10893,61 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         _영익 = _총익 - _판관
         def _률(a, b):
             return f'{a / b * 100:,.1f}%' if abs(b) >= 0.5 else '-'
+        _내부칸 = bool(_매['내부'].any())
         _몸 = ''
         for _과, _v, _내, _c in _줄들:
             _익 = _v - _c
             _몸 += (f'<tr><td class="lft" style="padding-left:16px">{_html.escape(_과)}</td><td>{CK(_v)}</td>'
-                    f'<td class="muted">{CK(_내) if abs(_내) >= 0.5 else "-"}</td><td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td>'
+                    + (f'<td class="muted">{CK(_내) if abs(_내) >= 0.5 else "-"}</td>' if _내부칸 else '')
+                    + f'<td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td>'
                     f'<td><b>{CK(_익)}</b></td><td>{_률(_익, _v)}</td><td>{_률(_익, _총익)}</td></tr>')
         _몸 += (f'<tr class="total"><td class="lft">매출이익 합계</td><td>{CK(_총매)}</td>'
-                f'<td>{CK(float(_매[_매["내부"]]["금액"].sum())) if _매["내부"].any() else "-"}</td><td>{CK(_총원)}</td>'
+                + (f'<td>{CK(float(_매[_매["내부"]]["금액"].sum()))}</td>' if _내부칸 else '') + f'<td>{CK(_총원)}</td>'
                 f'<td>{CK(_총익)}</td><td>{_률(_총익, _총매)}</td><td>100.0%</td></tr>'
                 f'<tr><td class="lft" style="padding-left:16px">판관비 (공통 — 매출구분에 나누지 않음)</td>'
-                f'<td></td><td></td><td></td><td>{CK(-_판관)}</td><td>{_률(-_판관, _총매)}</td><td></td></tr>'
+                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(-_판관)}</td><td>{_률(-_판관, _총매)}</td><td></td></tr>'
                 f'<tr class="total hl"><td class="lft">영업이익 (매출이익 − 판관비)</td>'
-                f'<td></td><td></td><td></td><td>{CK(_영익)}</td><td>{_률(_영익, _총매)}</td><td></td></tr>')
+                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(_영익)}</td><td>{_률(_영익, _총매)}</td><td></td></tr>')
+        # 거래처별 매출 · 매출원가 · 매출이익 — 원가가 거래처별로 원장에 있는 것만 이익률을 냅니다
+        _거래처원가 = locals().get('_거래처원가', {})
+        _gm = _매.assign(_n=_매['Name'].map(_이름 if '_이름' in locals() else (lambda n: str(n))))
+        _gs = _gm.groupby(['과', '_n'])['금액'].sum()
+        _접몸 = ''
+        for _과, _v, _내, _c in _줄들:
+            if _과 not in _gs.index.get_level_values(0):
+                continue
+            _익 = _v - _c
+            _접몸 += (f'<tr class="total"><td class="lft">{_html.escape(_과)}</td><td>{CK(_v)}</td>'
+                      f'<td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td><td>{CK(_익)}</td><td>{_률(_익, _v)}</td></tr>')
+            _sub = _gs.loc[_과].sort_values(ascending=False)
+            _단독 = len(_sub[_sub.abs() >= 0.5]) == 1
+            for _n, _fee in _sub.items():
+                if abs(_fee) < 0.5:
+                    continue
+                _nn = str(_n)
+                if (_과, _nn) in _거래처원가:
+                    _cc = _거래처원가[(_과, _nn)]; _vv = float(_fee) + _cc
+                elif _단독:
+                    _cc, _vv = _c, _v
+                else:
+                    _cc, _vv = None, float(_fee)
+                _접몸 += (f'<tr><td class="lft" style="padding-left:18px">{_html.escape(_nn)}</td><td>{CK(_vv)}</td>'
+                          + (f'<td>{CK(_cc) if abs(_cc) >= 0.5 else "-"}</td><td>{CK(_vv - _cc)}</td><td>{_률(_vv - _cc, _vv)}</td></tr>'
+                             if _cc is not None else
+                             f'<td class="muted" colspan="3" style="text-align:center">원가가 거래처별로 원장에 없어 매출구분 합계로만 봅니다</td></tr>'))
+        _거래처접기 = (f'<details class="calcnote fold" style="margin-top:12px"><summary><b>거래처별 매출 · 매출원가 · 매출이익</b> '
+                      f'<span class="muted">(누르면 펼쳐집니다)</span></summary>'
+                      f'<div class="scrollx" style="margin-top:8px"><table class="lined" style="width:100%; table-layout:fixed">'
+                      f'<colgroup><col style="width:34%"><col style="width:17%"><col style="width:17%"><col style="width:17%"><col style="width:15%"></colgroup>'
+                      f'<thead><tr><th class="lft">매출구분 / 거래처</th><th>매출액</th><th>매출원가</th><th>매출이익</th><th>이익률</th></tr></thead>'
+                      f'<tbody>{_접몸}</tbody></table></div></details>') if _접몸 else ''
         구분손익html = f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>매출구분별 매출이익 · 영업손익 — {당해연도}년 1~{보고월}월 누적 <span class="unitbadge">단위 {단위K}</span></h3>
-        <div class="sub">매출이익 = 매출구분별 매출 − 같은 이름의 매출원가 · 판관비는 공통 비용이라 매출구분에 나누지 않고 합계에서 한 번만 뺍니다 · 「그중 {_상대}」 = 상대 법인에 판 내부매출{' · 중개 · IOR 은 순액(수수료만)이라 매출원가가 없습니다' if 법인 == 'CTKonnect' else ''}</div>
+      <div class="card"><h3>매출구분별 매출이익 · 영업손익 — {당해연도}년 1~{보고월}월 누적{' · 총액 기준' if _총액표 else ''} <span class="unitbadge">단위 {단위K}</span></h3>
+        <div class="sub">매출이익 = 매출구분별 매출 − 같은 이름의 매출원가 · 판관비는 공통 비용이라 매출구분에 나누지 않고 합계에서 한 번만 뺍니다{f' · 「그중 {_상대}」 = 상대 법인에 판 내부매출' if _내부칸 else ''}{(' · 총액 = 중개는 수수료 + 매입대금(매출원가) · IOR 은 수수료 + 대납 물류·통관비(매출원가) — 원장 매출 전표의 선급금 · 미지급금 대체 금액 · 매출이익은 순액과 같습니다' if _총액표 else ' · 중개 · IOR 은 순액(수수료만)이라 매출원가가 없습니다') if 법인 == 'CTKonnect' else ''}</div>
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
-          <colgroup><col style="width:28%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:10%"></colgroup>
-          <thead><tr><th class="lft">매출구분</th><th>매출액</th><th>그중 {_상대}</th><th>매출원가</th><th>매출이익</th><th>이익률</th><th>이익 비중</th></tr></thead>
-          <tbody>{_몸}</tbody></table></div></div></div>"""
+          <colgroup><col style="width:28%"><col style="width:13%">{'<col style="width:13%">' if _내부칸 else ''}<col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:10%"></colgroup>
+          <thead><tr><th class="lft">매출구분</th><th>매출액</th>{f'<th>그중 {_상대}</th>' if _내부칸 else ''}<th>매출원가</th><th>매출이익</th><th>이익률</th><th>이익 비중</th></tr></thead>
+          <tbody>{_몸}</tbody></table></div>{_거래처접기}</div></div>"""
 
     손익칸, 손익세부칸 = st.columns([2, 1], gap='small')   # 작은 화면에서도 오른쪽 세부내역이 읽히도록
     with 손익칸:
