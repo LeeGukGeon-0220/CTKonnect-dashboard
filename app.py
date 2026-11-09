@@ -10143,8 +10143,12 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                             if abs(v * 배율 / 표시나눔) >= 0.05)
     _영익표 = 영익원가L if 원가기준 else 영익L
     _세전표 = 세전원가L if 원가기준 else 세전L
-    영업외설명 = (f'<li>영업외손익 : {영업외조각 or "해당 없음"} → 세전이익 '
-                  f'<b>{CK1(sum(_세전표))}</b> (영업이익 {CK1(sum(_영익표))} + 영업외 {CK1(sum(영업외L))})</li>')
+    _이자 = float(영업외계정[[k for k in 영업외계정.index if str(k).replace(' ', '') == '이자비용']].sum())
+    _기타 = float(영업외계정.sum()) - _이자
+    _기타이름 = ' · '.join(str(k) for k in 영업외계정.index if str(k).replace(' ', '') != '이자비용'
+                         and abs(float(영업외계정[k]) * 배율 / 표시나눔) >= 0.5)
+    영업외설명 = (f'<li>영업외손익 <b>{CK1(sum(영업외L))}</b> = 이자비용 <b>{CK1(_이자)}</b> + 기타 {CK1(_기타)} '
+                  f'<span class="muted">({_기타이름 or "없음"})</span> → 세전이익 <b>{CK1(sum(_세전표))}</b></li>')
 
     if not 당해보기:          # 아래 현금흐름 표의 가정은 언제나 당해 실적으로 깝니다
         _m당 = list(range(1, 보고월 + 1))
@@ -10673,18 +10677,45 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                     _성 = '고정 (최근 시작)'
                 else:
                     _성 = '일회성'
-                _줄.append((_합, _거, _내, _성))
+                _월값 = _g.groupby('월')['v'].sum()
+                _줄.append((_합, _거, _내, _성, [float(_월값.get(m, 0.0)) for m in range(1, 보고월 + 1)]))
             _줄.sort(reverse=True)
             if _줄:
-                수수료설명 = ('<li><b>지급수수료 주요 내용</b> (금액 큰 순 · 원장 적요 기준)<ul style="margin:4px 0 0 0">'
-                            + ''.join(f'<li><b>{_html.escape(거)}</b> — {_html.escape(내[:40])} '
-                                      f'<span style="color:{T["accent"] if 성.startswith("고정") else T["ink3"]};font-weight:700">[{성}]</span></li>'
-                                      for _, 거, 내, 성 in _줄[:8]) + '</ul></li>')
+                _f = lambda v: '-' if abs(v) < 0.5 else (f'({-v:,.0f})' if v < 0 else f'{v:,.0f}')
+                _짧 = lambda t: {'고정 (매달)': '고정', '고정 (최근 시작)': '고정(신규)', '변동 (판매에 따라)': '변동',
+                                 '비정기 (차입 · 보증 때)': '비정기'}.get(t, t)
+                _위 = _줄[:8]
+                _나머 = _줄[8:]
+                if _나머:
+                    _위.append((sum(z[0] for z in _나머), f'그 외 {len(_나머)}곳', ', '.join(z[1] for z in _나머)[:30], '소액',
+                               [sum(z[4][i] for z in _나머) for i in range(보고월)]))
+                _td = 'padding:3px 6px;border-bottom:1px solid ' + T['line']
+                _몸 = ''.join(
+                    f'<tr><td style="{_td};text-align:left;overflow:hidden"><b style="white-space:nowrap">{_html.escape(거)}</b>'
+                    f'<div style="font-size:10.5px;color:{T["ink3"]};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{_html.escape(내)}">{_html.escape(내)}</div></td>'
+                    f'<td style="{_td};text-align:center;white-space:nowrap;font-weight:700;color:{T["accent"] if 성.startswith("고정") else T["ink3"]}">{_짧(성)}</td>'
+                    + ''.join(f'<td style="{_td};text-align:right">{_f(v)}</td>' for v in 월)
+                    + f'<td style="{_td};text-align:right;font-weight:700">{_f(합)}</td></tr>'
+                    for 합, 거, 내, 성, 월 in _위)
+                _계 = [sum(z[4][i] for z in _줄) for i in range(보고월)]
+                _몸 += (f'<tr style="font-weight:700;background:rgba(127,127,127,.08)"><td style="{_td};text-align:left" colspan="2">지급수수료 합계</td>'
+                        + ''.join(f'<td style="{_td};text-align:right">{_f(v)}</td>' for v in _계)
+                        + f'<td style="{_td};text-align:right">{_f(sum(_계))}</td></tr>')
+                _머 = f'padding:4px 6px;background:{T["navy"]};color:#FFFFFF;font-weight:600'
+                수수료설명 = (f'<li style="list-style:none;margin-left:-14px"><b>지급수수료 — 누구에게 · 무엇으로 · 매달 얼마</b> '
+                            f'<span class="muted">(금액 큰 순 · 원장 적요 기준 · 단위 {단위K})</span>'
+                            f'<div class="scrollx" style="margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11.5px;'
+                            f'font-variant-numeric:tabular-nums;table-layout:fixed"><colgroup><col style="width:21%"><col style="width:7%">'
+                            + f'<col style="width:{72 / (보고월 + 1):.2f}%">' * (보고월 + 1) + '</colgroup><thead><tr>'
+                            f'<th style="{_머};text-align:left">거래처 · 내용</th>'
+                            f'<th style="{_머};text-align:center">성격</th>'
+                            + ''.join(f'<th style="{_머};text-align:right">{m}월</th>' for m in range(1, 보고월 + 1))
+                            + f'<th style="{_머};text-align:right">누적</th></tr></thead><tbody>{_몸}</tbody></table></div></li>')
         except Exception:
             수수료설명 = ''
     주석html = (f'<details class="calcnote fold"><summary><b>※ 주석</b> '
-                f'<span class="muted">(누르면 펼쳐집니다)</span></summary><ul class="fnote">'
-                f'{원가설명}{수수료설명 if 수수료설명 else 영업외설명}{손익가정}</ul></details>')
+                f'<span class="muted">(누르면 펼쳐집니다)</span></summary><ul class="fnote" style="font-size:12.5px">'
+                f'{원가설명}{수수료설명}{영업외설명}{손익가정}</ul></details>')
 
     # ── 개선과제 · 판관비 절감방안 (패키지 「개선과제」「판관비절감」 시트에 월별 칸으로 작성, 2026-10-27)
     #    당월 · 전월 · 연간(요약) 세 칸 · 누르면 접히고 펼쳐짐 · 지난 달 칸은 엑셀에서 잠김
