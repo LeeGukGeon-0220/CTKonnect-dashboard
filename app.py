@@ -10830,9 +10830,68 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           <li class="red">■ 가정 : 직접재료비 · 외주가공비는 수불부 품목군 원가율로, 직접노무비 · 고정비 · 판관비는 그 달 매출 비중으로 나눴습니다 (약식)</li>
         </ul></div></div></div>"""
 
+    # ── 매출구분별 매출이익 · 판관비는 공통으로 보고 영업손익 (씨티케이커넥트 · 2026-11-09 요청)
+    구분손익html = ''
+    if 법인 in ('씨티케이커넥트', 'CTKonnect'):
+        _d = 당해원장[당해원장['계정분류'].eq('IS') & 당해원장['월'].le(보고월)].copy()
+        _d['과'] = _d['계정과목'].astype(str).str.replace(' ', '')
+        if 법인 == 'CTKonnect' and '계정영문' in _d.columns:          # 51101 상품 · 51103 중개 · 51104 IOR · 52101 상품원가
+            _코 = _d['계정영문'].astype(str).str.strip()
+            _d['과'] = (_d['과'].mask(_코.str.startswith('51101'), '상품매출')
+                        .mask(_코.str.startswith('51103'), '상품수수료매출(중개)')
+                        .mask(_코.str.startswith('51104'), 'IOR매출')
+                        .mask(_코.str.startswith('52101'), '상품매출원가'))
+            _상대 = '씨티케이커넥트'
+            _d['내부'] = _d['Name'].astype(str).str.upper().str.replace(' ', '').str.contains('씨티케이커넥트|컴플리톤|CTKCONNECTKOREA')
+        else:
+            _상대 = 'CTKonnect'
+            _d['내부'] = _d['Name'].astype(str).str.upper().str.replace(' ', '').str.contains('CTKONNECT')
+        _매 = _d[_d['분류'].eq('매출')]
+        _원 = _d[_d['분류'].eq('매출원가')]
+        _매합 = _매.groupby('과')['금액'].sum()
+        _내합 = _매[_매['내부']].groupby('과')['금액'].sum()
+        _원합 = _원.groupby('과')['금액'].sum().mul(-1)
+        _줄들, _쓴원가 = [], set()
+        for _과, _v in _매합.sort_values(ascending=False).items():
+            _c과 = _과 + '원가' if (_과 + '원가') in _원합.index else None
+            _c = float(_원합.get(_c과, 0.0)) if _c과 else 0.0
+            if _c과:
+                _쓴원가.add(_c과)
+            _줄들.append((_과, float(_v), float(_내합.get(_과, 0.0)), _c))
+        _남원가 = float(_원합[[i for i in _원합.index if i not in _쓴원가]].sum())
+        if abs(_남원가) >= 0.5:
+            _줄들.append(('기타 매출원가', 0.0, 0.0, _남원가))
+        _총매 = sum(z[1] for z in _줄들); _총원 = sum(z[3] for z in _줄들); _총익 = _총매 - _총원
+        _판관 = float(_d[_d['분류'].eq('판관비')]['금액'].sum()) * -1
+        _영익 = _총익 - _판관
+        def _률(a, b):
+            return f'{a / b * 100:,.1f}%' if abs(b) >= 0.5 else '-'
+        _몸 = ''
+        for _과, _v, _내, _c in _줄들:
+            _익 = _v - _c
+            _몸 += (f'<tr><td class="lft" style="padding-left:16px">{_html.escape(_과)}</td><td>{CK(_v)}</td>'
+                    f'<td class="muted">{CK(_내) if abs(_내) >= 0.5 else "-"}</td><td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td>'
+                    f'<td><b>{CK(_익)}</b></td><td>{_률(_익, _v)}</td><td>{_률(_익, _총익)}</td></tr>')
+        _몸 += (f'<tr class="total"><td class="lft">매출이익 합계</td><td>{CK(_총매)}</td>'
+                f'<td>{CK(float(_매[_매["내부"]]["금액"].sum())) if _매["내부"].any() else "-"}</td><td>{CK(_총원)}</td>'
+                f'<td>{CK(_총익)}</td><td>{_률(_총익, _총매)}</td><td>100.0%</td></tr>'
+                f'<tr><td class="lft" style="padding-left:16px">판관비 (공통 — 매출구분에 나누지 않음)</td>'
+                f'<td></td><td></td><td></td><td>{CK(-_판관)}</td><td>{_률(-_판관, _총매)}</td><td></td></tr>'
+                f'<tr class="total hl"><td class="lft">영업이익 (매출이익 − 판관비)</td>'
+                f'<td></td><td></td><td></td><td>{CK(_영익)}</td><td>{_률(_영익, _총매)}</td><td></td></tr>')
+        구분손익html = f"""{CARD_CSS}<div class="wrap" translate="no">
+      <div class="card"><h3>매출구분별 매출이익 · 영업손익 — {당해연도}년 1~{보고월}월 누적 <span class="unitbadge">단위 {단위K}</span></h3>
+        <div class="sub">매출이익 = 매출구분별 매출 − 같은 이름의 매출원가 · 판관비는 공통 비용이라 매출구분에 나누지 않고 합계에서 한 번만 뺍니다 · 「그중 {_상대}」 = 상대 법인에 판 내부매출{' · 중개 · IOR 은 순액(수수료만)이라 매출원가가 없습니다' if 법인 == 'CTKonnect' else ''}</div>
+        <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
+          <colgroup><col style="width:28%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:10%"></colgroup>
+          <thead><tr><th class="lft">매출구분</th><th>매출액</th><th>그중 {_상대}</th><th>매출원가</th><th>매출이익</th><th>이익률</th><th>이익 비중</th></tr></thead>
+          <tbody>{_몸}</tbody></table></div></div></div>"""
+
     손익칸, 손익세부칸 = st.columns([2, 1], gap='small')   # 작은 화면에서도 오른쪽 세부내역이 읽히도록
     with 손익칸:
         st.html(손익html)
+        if 구분손익html:                   # 손익계산서 바로 아래 (2026-11-09)
+            st.html(구분손익html)
         if 효율화html:
             st.html(효율화html)
         if 품목군html:
