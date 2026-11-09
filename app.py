@@ -1481,6 +1481,24 @@ def 기타사항읽기(xls, 시트='기타주요사항'):
     return out
 
 
+def 원장총액(원장):
+    """원장 매출 전표(51103 중개 · 51104 IOR) 안의 선급금(11801) · 미지급금(21201) 대체 = 매입대금 · 대납비 → 월별."""
+    if 원장 is None or 'TransactionID' not in 원장.columns:
+        return None
+    c = 원장['계정영문'].astype(str).str.strip()
+    수 = 원장[c.str.startswith('51103') | c.str.startswith('51104')]
+    if 수.empty:
+        return None
+    전표 = 수.groupby('TransactionID').agg(코=('계정영문', 'first'), 월=('월', 'first'))
+    대 = 원장[(c.str.startswith('11801') | c.str.startswith('21201')) & 원장['TransactionID'].isin(전표.index)]
+    전표['원가'] = (대['Credit'].fillna(0) - 대['Debit'].fillna(0)).groupby(대['TransactionID']).sum().reindex(전표.index).fillna(0.0)
+    out = {}
+    for k, 앞 in (('중개매입', '51103'), ('IOR대납', '51104')):
+        g = 전표[전표['코'].astype(str).str.strip().str.startswith(앞)].groupby('월')['원가'].sum()
+        out[k] = {int(m): float(v) for m, v in g.items()}
+    return out
+
+
 def 총액읽기(xls, 시트='요약보고'):
     """요약보고 「총액기준 월별 영업손익」 표 → {'중개매입': {월: 금액}, 'IOR대납': {…}, '거래액': {…}} (없으면 None)."""
     if 시트 not in xls.sheet_names:
@@ -9887,6 +9905,12 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
 
     매출L, 원가L, 총이익L = 줄('매출액'), 줄('매출원가'), 줄('매출총이익')
     총액자료 = (BS밑자료 or {}).get('총액')
+    try:                                   # 원장 전표에서 바로 (2026-11-09) — 요약보고 표보다 우선
+        _원장총액 = 원장총액(당해원장) if 법인 == 'CTKonnect' else None
+        if _원장총액:
+            총액자료 = dict(총액자료 or {}, **_원장총액)
+    except Exception:
+        pass
     총액보기 = bool(총액자료) and 당해보기 and st.session_state.get('dash_pl_gross') == '총액매출'
     판관L, 판관순L = 줄('판매관리비'), 줄('판관비 (SR&ED 반영)')
     SREDL = [-v for v in 줄('SR&ED 차감')]
@@ -10601,7 +10625,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="card"><h3>{손익골라본} <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">{연도X}년 {f'{보고월X}월 (당월)' if _당월만 else f'1~{보고월X}월 누적'} · {'매출구분 → 거래처별' if 손익골라본 == '매출액' else '거래처별 · 상위 7곳 + 기타'}</div>
         {세부패널(_세부자료, '금액', 손익부호).replace('>누적 금액<', '>당월 금액<' if _당월만 else '>누적 금액<')}</div></div>"""
-    손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (연결패키지 요약보고 4번 표)'
+    손익예상안내 = ((' · <b>총액 기준</b> : 매출액 · 매출원가에 중개 매입대금 · IOR 대납비를 더한 거래액 (원장 매출 전표의 선급금 · 미지급금 대체 금액)'
                      if 총액보기 else ' · <b>순액 기준</b> (장부 매출)')
                     + (f' · <b>{예상월들[0]}~{예상월들[-1]}월(예상)</b> 은 실적이 아니라 '
                     f'<b>가정</b>입니다' if 예상월들 else ''))
