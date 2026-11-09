@@ -10925,14 +10925,14 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             _몸 += (f'<tr><td class="lft" style="padding-left:16px">{_html.escape(_과)}</td><td>{CK(_v)}</td>'
                     + (f'<td class="muted">{CK(_내) if abs(_내) >= 0.5 else "-"}</td>' if _내부칸 else '')
                     + f'<td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td>'
-                    f'<td><b>{CK(_익)}</b></td><td>{_률(_익, _v)}</td><td>{_률(_익, _총익)}</td></tr>')
+                    f'<td><b>{CK(_익)}</b></td><td>{_률(_익, _v)}</td></tr>')
         _몸 += (f'<tr class="total"><td class="lft">매출이익 합계</td><td>{CK(_총매)}</td>'
                 + (f'<td>{CK(float(_매[_매["내부"]]["금액"].sum()))}</td>' if _내부칸 else '') + f'<td>{CK(_총원)}</td>'
-                f'<td>{CK(_총익)}</td><td>{_률(_총익, _총매)}</td><td>100.0%</td></tr>'
+                f'<td>{CK(_총익)}</td><td>{_률(_총익, _총매)}</td></tr>'
                 f'<tr><td class="lft" style="padding-left:16px">판관비 (공통 — 매출구분에 나누지 않음)</td>'
-                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(-_판관)}</td><td>{_률(-_판관, _총매)}</td><td></td></tr>'
+                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(-_판관)}</td><td>{_률(-_판관, _총매)}</td></tr>'
                 f'<tr class="total hl"><td class="lft">영업이익 (매출이익 − 판관비)</td>'
-                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(_영익)}</td><td>{_률(_영익, _총매)}</td><td></td></tr>')
+                f'<td></td>{"<td></td>" if _내부칸 else ""}<td></td><td>{CK(_영익)}</td><td>{_률(_영익, _총매)}</td></tr>')
         # 거래처별 매출 · 매출원가 · 매출이익 — 원가가 거래처별로 원장에 있는 것만 이익률을 냅니다
         _거래처원가 = locals().get('_거래처원가', {})
         _gm = _매.assign(_n=_매['Name'].map(_이름 if '_이름' in locals() else (lambda n: str(n))))
@@ -10987,8 +10987,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="card"><h3>매출구분별 매출이익 · 영업손익 — {당해연도}년 1~{보고월}월 누적{' · 총액 기준' if _총액표 else ''} <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">매출이익 = 매출구분별 매출 − 같은 이름의 매출원가 · 판관비는 공통 비용이라 매출구분에 나누지 않고 합계에서 한 번만 뺍니다{f' · 「그중 {_상대}」 = 상대 법인에 판 내부매출' if _내부칸 else ''}{(' · 총액 = 중개는 수수료 + 매입대금(매출원가) · IOR 은 수수료 + 대납 물류·통관비(매출원가) — 원장 매출 전표의 선급금 · 미지급금 대체 금액 · 매출이익은 순액과 같습니다' if _총액표 else ' · 중개 · IOR 은 순액(수수료만)이라 매출원가가 없습니다') if 법인 == 'CTKonnect' else ''}</div>
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
-          <colgroup><col style="width:28%"><col style="width:13%">{'<col style="width:13%">' if _내부칸 else ''}<col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:10%"></colgroup>
-          <thead><tr><th class="lft">매출구분</th><th>매출액</th>{f'<th>그중 {_상대}</th>' if _내부칸 else ''}<th>매출원가</th><th>매출이익</th><th>이익률</th><th>이익 비중</th></tr></thead>
+          <colgroup><col style="width:28%"><col style="width:13%">{'<col style="width:13%">' if _내부칸 else ''}<col style="width:15%"><col style="width:15%"><col style="width:12%"></colgroup>
+          <thead><tr><th class="lft">매출구분</th><th>매출액</th>{f'<th>그중 {_상대}</th>' if _내부칸 else ''}<th>매출원가</th><th>매출이익</th><th>이익률</th></tr></thead>
           <tbody>{_몸}</tbody></table></div>{_거래처접기}</div></div>"""
         # 계약 대비 점검 — 계약서(작업자료 「팩토링 거래 계약서」): 물품대금 = 브랜드사 매입금액(납품 원가) + Mark-Up 4% · DDP(운송·통관·관세 공급자 부담)
         if 법인 == 'CTKonnect' and _총액표 and len(_전표):
