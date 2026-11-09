@@ -10879,7 +10879,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 _수['구'] = np.where(_수['계정영문'].astype(str).str.strip().str.startswith('51103'), '상품수수료매출(중개)', 'IOR매출')
                 _대 = _w[(_wc.str.startswith('11801') | _wc.str.startswith('21201')) & _w['TransactionID'].isin(_수['TransactionID'])]
                 _전표원가 = (_대['Credit'].fillna(0) - _대['Debit'].fillna(0)).groupby(_대['TransactionID']).sum()
-                _전표 = _수.groupby('TransactionID').agg(구=('구', 'first'), 거=('Name', 'first'))
+                _전표 = _수.groupby('TransactionID').agg(구=('구', 'first'), 거=('Name', 'first'),
+                                                       일=('거래일', 'first'), 적=('Description', 'first'), 수수료=('금액', 'sum'))
                 _전표['원가'] = _전표원가.reindex(_전표.index).fillna(0.0)
                 for (_구, _거), _v in _전표.groupby(['구', '거'])['원가'].sum().items():
                     _거래처원가[(_구, _이름(_거))] = _거래처원가.get((_구, _이름(_거)), 0.0) + float(_v)
@@ -10917,7 +10918,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             if _과 not in _gs.index.get_level_values(0):
                 continue
             _익 = _v - _c
-            _접몸 += (f'<tr class="total"><td class="lft">{_html.escape(_과)}</td><td>{CK(_v)}</td>'
+            _접몸 += (f'<tr class="total"><td class="lft">{_html.escape(_과)} 합계</td><td>{CK(_v)}</td>'
                       f'<td>{CK(_c) if abs(_c) >= 0.5 else "-"}</td><td>{CK(_익)}</td><td>{_률(_익, _v)}</td></tr>')
             _sub = _gs.loc[_과].sort_values(ascending=False)
             _단독 = len(_sub[_sub.abs() >= 0.5]) == 1
@@ -10934,12 +10935,29 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 _접몸 += (f'<tr><td class="lft" style="padding-left:18px">{_html.escape(_nn)}</td><td>{CK(_vv)}</td>'
                           + (f'<td>{CK(_cc) if abs(_cc) >= 0.5 else "-"}</td><td>{CK(_vv - _cc)}</td><td>{_률(_vv - _cc, _vv)}</td></tr>'
                              if _cc is not None else
-                             f'<td class="muted" colspan="3" style="text-align:center">원가가 거래처별로 원장에 없어 매출구분 합계로만 봅니다</td></tr>'))
+                             '<td></td><td></td><td></td></tr>'))
+        if 법인 == 'CTKonnect' and _거래처원가:
+            _접몸 = ''
+            for _대상 in ('I-WORLD', 'EGONG EGONG'):
+                _조각 = []
+                for _과 in ('상품수수료매출(중개)', 'IOR매출'):
+                    if (_과, _대상) not in _거래처원가:
+                        continue
+                    _fee = float(_gs.get((_과, _대상), 0.0)); _cc = _거래처원가[(_과, _대상)]
+                    _조각.append((_과, _fee + _cc, _cc))
+                if not _조각:
+                    continue
+                _gv = sum(z[1] for z in _조각); _gc = sum(z[2] for z in _조각)
+                _접몸 += (f'<tr class="total"><td class="lft">{_대상}</td><td>{CK(_gv)}</td><td>{CK(_gc)}</td>'
+                          f'<td>{CK(_gv - _gc)}</td><td>{_률(_gv - _gc, _gv)}</td></tr>')
+                for _과, _vv, _cc in _조각:
+                    _접몸 += (f'<tr><td class="lft" style="padding-left:18px">{_html.escape(_과)}</td><td>{CK(_vv)}</td>'
+                              f'<td>{CK(_cc)}</td><td>{CK(_vv - _cc)}</td><td>{_률(_vv - _cc, _vv)}</td></tr>')
         _거래처접기 = (f'<details class="calcnote fold" style="margin-top:12px"><summary><b>거래처별 매출 · 매출원가 · 매출이익</b> '
                       f'<span class="muted">(누르면 펼쳐집니다)</span></summary>'
                       f'<div class="scrollx" style="margin-top:8px"><table class="lined" style="width:100%; table-layout:fixed">'
                       f'<colgroup><col style="width:34%"><col style="width:17%"><col style="width:17%"><col style="width:17%"><col style="width:15%"></colgroup>'
-                      f'<thead><tr><th class="lft">매출구분 / 거래처</th><th>매출액</th><th>매출원가</th><th>매출이익</th><th>이익률</th></tr></thead>'
+                      f'<thead><tr><th class="lft">{"거래처 / 매출구분" if 법인 == "CTKonnect" else "매출구분 / 거래처"}</th><th>매출액</th><th>매출원가</th><th>매출이익</th><th>이익률</th></tr></thead>'
                       f'<tbody>{_접몸}</tbody></table></div></details>') if _접몸 else ''
         구분손익html = f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>매출구분별 매출이익 · 영업손익 — {당해연도}년 1~{보고월}월 누적{' · 총액 기준' if _총액표 else ''} <span class="unitbadge">단위 {단위K}</span></h3>
@@ -10948,6 +10966,52 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           <colgroup><col style="width:28%"><col style="width:13%">{'<col style="width:13%">' if _내부칸 else ''}<col style="width:13%"><col style="width:13%"><col style="width:10%"><col style="width:10%"></colgroup>
           <thead><tr><th class="lft">매출구분</th><th>매출액</th>{f'<th>그중 {_상대}</th>' if _내부칸 else ''}<th>매출원가</th><th>매출이익</th><th>이익률</th><th>이익 비중</th></tr></thead>
           <tbody>{_몸}</tbody></table></div>{_거래처접기}</div></div>"""
+        # 계약 대비 점검 — 계약서(작업자료 「팩토링 거래 계약서」): 물품대금 = 브랜드사 매입금액(납품 원가) + Mark-Up 4% · DDP(운송·통관·관세 공급자 부담)
+        if 법인 == 'CTKonnect' and _총액표 and len(_전표):
+            _계약 = {'I-WORLD': '아이월드 물품공급계약 (2026-04-01)', 'EGONG EGONG': '이공이공 물품공급계약 (2025-10-23) · 1~3차 합의'}
+            _행 = ''; _요약 = {'4': [0, 0.0], '2': [0, 0.0], '초과': [0, 0.0]}
+            for _t, r in _전표[_전표['구'].eq('상품수수료매출(중개)')].sort_values('일').iterrows():
+                _f = float(r['수수료']); _c = float(r['원가']); _g = _f + _c
+                _율 = _f / _c * 100 if abs(_c) >= 0.5 else 0.0
+                if abs(_율 - 4) <= 0.3:
+                    _판, _색, _k = '계약대로 4%', T['ok'], '4'
+                elif abs(_율 - 2) <= 0.3:
+                    _판, _색, _k = '4% 중 2% — 나머지 2%는 ㈜씨티케이 몫', T['accent'], '2'
+                else:
+                    _판, _색, _k = f'계약 4%와 다름 ({_율:,.1f}%) — 확인 필요', T['warn'], '초과'
+                _요약[_k][0] += 1; _요약[_k][1] += _f
+                _거 = _이름(r['거'])
+                _행 += (f'<tr><td>{r["일"]:%m-%d}</td><td class="lft">{_html.escape(_거)}</td>'
+                        f'<td class="lft muted" style="white-space:normal">{_html.escape(str(r["적"])[:34])}</td>'
+                        f'<td>{CK(_g)}</td><td>{CK(_g / 1.04)}</td><td>{CK(_c)}</td><td><b>{CK(_f)}</b></td>'
+                        f'<td><b>{_율:,.1f}%</b></td><td class="lft" style="color:{_색};font-weight:700;white-space:normal">{_판}</td></tr>')
+            _ior = _전표[_전표['구'].eq('IOR매출')].assign(_n=lambda x: x['거'].map(_이름)).groupby('_n')[['원가', '수수료']].sum()
+            _ior행 = ''.join(
+                f'<tr><td class="lft">{_html.escape(n)}</td><td>{CK(v["원가"] + v["수수료"])}</td><td>{CK(v["원가"])}</td>'
+                f'<td><b>{CK(v["수수료"])}</b></td><td class="lft" style="white-space:normal">'
+                + ('3차 합의(2026-09-16)로 포워더 운임 · 통관료 구매자 청구 합의 — 그 전 청구는 원계약 DDP(공급자 부담)와 다름'
+                   if 'EGONG' in n.upper() else
+                   '계약 DDP — 운송 · 통관 · 관세는 공급자 부담 · 따로 합의한 문서 확인 필요' if 'WORLD' in n.upper() else
+                   '계약서 없음 (작업자료에 없음)')
+                + '</td></tr>' for n, v in _ior.sort_values('원가', ascending=False).iterrows())
+            _결론 = (f'<b>결론</b> — 거래처 청구는 {_요약["4"][0] + _요약["2"][0]}건이 계약대로 「원가 × 1.04」입니다. '
+                     f'다만 CTKonnect 가 실제로 갖는 몫은 4% 전부인 건이 {_요약["4"][0]}건({CK(_요약["4"][1])}), '
+                     f'2%만인 건이 {_요약["2"][0]}건({CK(_요약["2"][1])})이고, '
+                     f'계약 4%와 다른 건이 {_요약["초과"][0]}건({CK(_요약["초과"][1])})입니다. '
+                     'IOR 수수료(건당 정액)는 두 계약서 모두에 근거 조항이 없습니다.')
+            구분손익html += f"""{CARD_CSS}<div class="wrap" translate="no">
+      <div class="card"><h3>계약 대비 점검 — 아이월드 · 이공이공 <span class="unitbadge">단위 {단위K}</span></h3>
+        <div class="sub">계약 = 브랜드사 매입금액(납품 원가) + Mark-Up 4% · DDP(미국 창고까지 운송 · 통관 · 관세는 공급자 부담) · 근거 = 작업자료 「팩토링 거래 계약서」 · 원장 매출 전표 기준</div>
+        <div class="calcnote" style="margin:4px 0 12px">{_결론}</div>
+        <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
+          <colgroup><col style="width:7%"><col style="width:11%"><col style="width:20%"><col style="width:10%"><col style="width:10%"><col style="width:10%"><col style="width:8%"><col style="width:7%"><col style="width:17%"></colgroup>
+          <thead><tr><th>날짜</th><th class="lft">거래처</th><th class="lft">적요</th><th>청구액</th><th>청구 ÷ 1.04</th><th>CTKonnect 원가</th><th>수수료</th><th>원가 대비</th><th class="lft">판정</th></tr></thead>
+          <tbody>{_행}</tbody></table></div>
+        <div class="sub" style="margin-top:14px"><b>IOR 매출</b> — 거래처에 청구한 물류 · 통관비 + 수수료</div>
+        <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
+          <colgroup><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:47%"></colgroup>
+          <thead><tr><th class="lft">거래처</th><th>청구액</th><th>그중 대납 비용</th><th>수수료</th><th class="lft">계약과의 관계</th></tr></thead>
+          <tbody>{_ior행}</tbody></table></div></div></div>"""
 
     손익칸, 손익세부칸 = st.columns([2, 1], gap='small')   # 작은 화면에서도 오른쪽 세부내역이 읽히도록
     with 손익칸:
