@@ -10634,9 +10634,57 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     손익가정 = ('' if not 예상월들 else
                 f'<li class="red">■ 가정 : {예상월들[0]}~{예상월들[-1]}월 = 1~{보고월}월 월평균 '
                 f'(월 매출 {CK(예상매출)} · 영업이익 {CK(_예영익)}) · 영업외손익 제외</li>')
+    수수료설명 = ''
+    if 법인 == 'CTKonnect':
+        try:
+            _w = 당해원장[당해원장['월'].le(보고월)].copy()
+            _코 = _w['계정영문'].astype(str).str.strip()
+            _w = _w[_코.str[:5].isin(['52652', '52653', '52654', '52655'])].copy()
+            _w['코'] = _w['계정영문'].astype(str).str.strip().str[:5]
+            _w['v'] = _w['Debit'].fillna(0) - _w['Credit'].fillna(0)
+            _w['거'] = _w['Name'].map(lambda n: re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip()
+                                     if str(n) not in ('nan', 'None', '') else '')
+            _w.loc[_w['코'].eq('52654'), '거'] = '금융 · 차입 관련'
+            _w.loc[_w['코'].isin(['52653', '52655']), '거'] = _w.loc[_w['코'].isin(['52653', '52655']), '거'].replace('', '마켓')
+            _판매 = re.compile(r'amazon|tiktok|shopify|마켓', re.I)
+            _w.loc[_w['거'].str.contains(_판매) | _w['코'].isin(['52653', '52655']), '거'] = 'Amazon · TikTok 등 마켓'
+            _줄 = []
+            for _거, _g in _w[_w['거'].ne('')].groupby('거'):
+                _합 = float(_g['v'].sum())
+                if abs(_합) < 50:
+                    continue
+                _적 = _g.loc[~_g['Description'].astype(str).str.contains('결산|역분개|nan'), 'Description'].astype(str)
+                _적 = _적.map(lambda t: re.sub(r'_CTK-.*$|_\d+회차.*$|\s*_\d{2}/\d{2}/\d{2}.*$', '', t).strip())
+                if _거 == 'Amazon · TikTok 등 마켓':
+                    _내 = '판매 · 배송(FBA) · 장기보관 · 폐기 수수료'
+                elif len(_적):
+                    _금 = _g.loc[_적.index, 'v'].groupby(_적).sum()
+                    _내 = _금.sort_values(ascending=False).index[0]
+                else:
+                    _내 = '월말 결산분개로만 잡힘 (내용 확인 필요)'
+                _월수 = _g.loc[_g['v'].abs() >= 1, '월'].nunique()
+                if _거 == '금융 · 차입 관련':
+                    _성 = '비정기 (차입 · 보증 때)'
+                elif _판매.search(_거) or _g['코'].isin(['52653', '52655']).all():
+                    _성 = '변동 (판매에 따라)'
+                elif _월수 >= 3:
+                    _성 = '고정 (매달)'
+                elif _월수 == 2 and int(_g['월'].max()) >= 보고월 - 1:
+                    _성 = '고정 (최근 시작)'
+                else:
+                    _성 = '일회성'
+                _줄.append((_합, _거, _내, _성))
+            _줄.sort(reverse=True)
+            if _줄:
+                수수료설명 = ('<li><b>지급수수료 주요 내용</b> (금액 큰 순 · 원장 적요 기준)<ul style="margin:4px 0 0 0">'
+                            + ''.join(f'<li><b>{_html.escape(거)}</b> — {_html.escape(내[:40])} '
+                                      f'<span style="color:{T["accent"] if 성.startswith("고정") else T["ink3"]};font-weight:700">[{성}]</span></li>'
+                                      for _, 거, 내, 성 in _줄[:8]) + '</ul></li>')
+        except Exception:
+            수수료설명 = ''
     주석html = (f'<details class="calcnote fold"><summary><b>※ 주석</b> '
                 f'<span class="muted">(누르면 펼쳐집니다)</span></summary><ul class="fnote">'
-                f'{원가설명}{영업외설명}{손익가정}</ul></details>')
+                f'{원가설명}{수수료설명 if 수수료설명 else 영업외설명}{손익가정}</ul></details>')
 
     # ── 개선과제 · 판관비 절감방안 (패키지 「개선과제」「판관비절감」 시트에 월별 칸으로 작성, 2026-10-27)
     #    당월 · 전월 · 연간(요약) 세 칸 · 누르면 접히고 펼쳐짐 · 지난 달 칸은 엑셀에서 잠김
@@ -11002,7 +11050,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 elif abs(_율 - 2) <= 0.3:
                     _판, _색, _k = '4% 중 2% — 나머지 2%는 ㈜씨티케이 몫', T['accent'], '2'
                 else:
-                    _판, _색, _k = f'계약 4%와 다름 ({_율:,.1f}%) — 확인 필요', T['warn'], '초과'
+                    _판, _색, _k = (f'계약 4% 초과 ({_율:,.1f}%) — 환율차이 추가이익 발생' if _율 > 4 else f'계약 4%와 다름 ({_율:,.1f}%) — 확인 필요'), T['warn'], '초과'
                 _요약[_k][0] += 1; _요약[_k][1] += _f
                 _거 = _이름(r['거'])
                 _행 += (f'<tr><td>{r["일"]:%m-%d}</td><td class="lft">{_html.escape(_거)}</td>'
@@ -11021,7 +11069,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             _결론 = (f'<b>결론</b> — 거래처 청구는 {_요약["4"][0] + _요약["2"][0]}건이 계약대로 「원가 × 1.04」입니다. '
                      f'다만 CTKonnect 가 실제로 갖는 몫은 4% 전부인 건이 {_요약["4"][0]}건({CK(_요약["4"][1])}), '
                      f'2%만인 건이 {_요약["2"][0]}건({CK(_요약["2"][1])})이고, '
-                     f'계약 4%와 다른 건이 {_요약["초과"][0]}건({CK(_요약["초과"][1])})입니다. '
+                     f'4%를 넘는 건이 {_요약["초과"][0]}건({CK(_요약["초과"][1])} — 환율차이로 추가이익 발생)입니다. '
                      'IOR 수수료(건당 정액)는 두 계약서 모두에 근거 조항이 없습니다.')
             구분손익html += f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>계약 대비 점검 — 아이월드 · 이공이공 <span class="unitbadge">단위 {단위K}</span></h3>
