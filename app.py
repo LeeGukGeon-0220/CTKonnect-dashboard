@@ -6621,8 +6621,9 @@ def 연결패키지캐시(원장바이트, 양식바이트):
 
 
 
-양식보관 = '최근패키지양식.xlsx'      # 본사에서 받은 연결패키지 원본
-패키지보관 = '최근패키지.xlsx'        # 마지막으로 만든 연결패키지 재무제표
+os.makedirs('_작업중', exist_ok=True)
+양식보관 = '_작업중/최근패키지양식.xlsx'      # 본사에서 받은 연결패키지 원본
+패키지보관 = '_작업중/최근패키지.xlsx'        # 마지막으로 만든 연결패키지 재무제표
 
 
 def 연결패키지양식칸():
@@ -7246,8 +7247,9 @@ with st.sidebar.container(key='nav_container'):
 메뉴 = st.session_state['menu']
 st.sidebar.write('---')
 
-CACHE_PATH = '최근업로드.xlsx'
-이름기록 = '최근업로드_파일이름.txt'
+os.makedirs('_작업중', exist_ok=True)
+CACHE_PATH = '_작업중/최근업로드.xlsx'
+이름기록 = '_작업중/최근업로드_파일이름.txt'
 자료있음 = os.path.exists(CACHE_PATH)
 
 # ══ 자료 보관소 — 웹에서도 자료가 사라지지 않게 ══════════════════════════
@@ -7291,7 +7293,7 @@ def 보관소에서받기():
     if not os.path.exists(보관용량자리):
         보관용량확인()
     for 파일, 이름표, 둘곳, 둘이름 in ((보관파일, 보관이름표, CACHE_PATH, 이름기록),
-                                       (보관KR파일, 보관KR이름표, '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt')):
+                                       (보관KR파일, 보관KR이름표, '_작업중/최근업로드_KR.xlsx', '_작업중/최근업로드_KR_파일이름.txt')):
         if os.path.exists(둘곳):
             continue
         try:
@@ -7379,7 +7381,7 @@ def 보관소에저장(바이트, 파일이름, 법인자리='US'):
     return True
 
 
-보관용량자리 = '최근보관용량.txt'
+보관용량자리 = '_작업중/최근보관용량.txt'
 보관용량경고MB = 800          # GitHub 권장 1GB — 그 전에 알림
 
 
@@ -7536,7 +7538,7 @@ def 웹자료열기():
                      '「7. 웹 Secrets 붙여넣기용.txt」 내용을 Streamlit 앱 Settings → Secrets 에 그대로 붙여 넣어 주세요.')
         return
     for 파일, 둘곳, 둘이름 in (('CTKonnect.enc', CACHE_PATH, 이름기록),
-                               ('씨티케이커넥트.enc', '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt')):
+                               ('씨티케이커넥트.enc', '_작업중/최근업로드_KR.xlsx', '_작업중/최근업로드_KR_파일이름.txt')):
         p = os.path.join('_웹자료', 파일)
         if not os.path.exists(p):
             continue
@@ -7563,7 +7565,7 @@ if os.name != 'nt':                       # 웹(리눅스 서버)에서는 늘 �
     if 웹자료문제:
         st.warning('⚠ ' + 웹자료문제)
 # 웹 서버가 새로 켜졌으면 GitHub 자료 저장소에서 두 법인 마지막 파일을 먼저 내려받습니다 (2026-11-03)
-if not 자료있음 or not os.path.exists('최근업로드_KR.xlsx'):
+if not 자료있음 or not os.path.exists('_작업중/최근업로드_KR.xlsx'):
     try:
         보관소에서받기()
     except Exception:
@@ -7629,9 +7631,9 @@ except OSError:
     pass
 
 # 한 번 올리면 그대로 남겨 두는 자료 — 다음에 또 올리지 않아도 됩니다
-원장보관 = '최근원장.xlsx'            # ① 퀵북 원장 원본
-통장보관 = '최근통장.xlsx'            # ② 2026년 금융거래 (CTKonnect)
-전월보관 = '최근전월실적.xlsx'        # ② 지난달 실적보고 엑셀
+원장보관 = '_작업중/최근원장.xlsx'            # ① 퀵북 원장 원본
+통장보관 = '_작업중/최근통장.xlsx'            # ② 2026년 금융거래 (CTKonnect)
+전월보관 = '_작업중/최근전월실적.xlsx'        # ② 지난달 실적보고 엑셀
 
 
 def 자료남기기(자리, 올림):
@@ -7936,7 +7938,7 @@ def 자료종류(바이트):
 종류이름 = {'원장반영': 'CTKonnect 원장 → 패키지에 반영', '실적': 'CTKonnect 실적 엑셀', '한국실적': '씨티케이커넥트 연결패키지', '한국분개장': '씨티케이커넥트 분개장 → 패키지로 변환', '원장': '원장 원본', '양식': '연결패키지 양식'}
 
 
-KR보관, KR이름표 = '최근업로드_KR.xlsx', '최근업로드_KR_파일이름.txt'      # 씨티케이커넥트(한국 법인) 연결패키지 자리
+KR보관, KR이름표 = '_작업중/최근업로드_KR.xlsx', '_작업중/최근업로드_KR_파일이름.txt'      # 씨티케이커넥트(한국 법인) 연결패키지 자리
 
 
 def 한국법인자료(바이트, 이름=''):
@@ -8947,7 +8949,7 @@ else:
       그리고 며칠 아무도 안 들어와 서버가 잠들었다 깨어날 때 지워집니다.
       평소 쓰실 때는 지워지지 않습니다.<br>
       늘 켜 두고 쓰시려면 <b style="color:{T['ink2']}">「1. 대시보드_실행.bat」</b> 로
-      회사 PC에서 여시면 됩니다 — 그때는 파일이 D:\\5. CTKonnect\\11-1. CTKonnect-Dashboard 에 그대로 남아
+      회사 PC에서 여시면 됩니다 — 그때는 파일이 D:\\5. CTKonnect 에 그대로 남아
       다시 올리실 필요가 없습니다.
     </div>
   </div>
@@ -9273,20 +9275,20 @@ if 메뉴 == '연결 손익계산서':
     굵게 = {'매출총이익', '영업이익', '법인세비용차감전이익', '당기순이익'}
     몸 = ''
     for 이름, 수준, u, k, 차, 대, 연, 비 in 줄들:
-        st_ = ' style="font-weight:700; background:rgba(127,127,127,.07)"' if 이름 in 굵게 else (' style="font-weight:700"' if 수준 == 0 else '')
+        st_ = ' class="total"' if (이름 in 굵게 or 수준 == 0) else ' class="sub"'
         if 수준 == 'etc':
-            st_, 이름칸 = ' class="csetc"', ('&nbsp;&nbsp;&nbsp;<label for="cs-etc" class="cstog">' + _html.escape(이름)
+            st_, 이름칸 = ' class="sub csetc"', ('<label for="cs-etc" class="cstog">' + _html.escape(이름)
                                          + ' <span class="cscaret">▸</span></label>')
         elif 수준 == 'sga':
-            st_, 이름칸 = ' class="cssga"', '&nbsp;' * 7 + _html.escape(이름)
+            st_, 이름칸 = ' class="sub2 cssga"', _html.escape(이름)
         elif str(수준).startswith('hd:'):
             _n = 수준[3:]
-            st_, 이름칸 = ' style="font-weight:700"', (f'<label for="cs-{_n}" class="cstog">' + _html.escape(이름)
+            st_, 이름칸 = ' class="total"', (f'<label for="cs-{_n}" class="cstog">' + _html.escape(이름)
                                                     + f' <span class="cscaret cc-{_n}">▸</span></label>')
         elif str(수준).startswith('hc:'):
-            st_, 이름칸 = f' class="cssub cs-{수준[3:]}"', '&nbsp;' * 4 + _html.escape(이름)
+            st_, 이름칸 = f' class="sub cssub cs-{수준[3:]}"', _html.escape(이름)
         else:
-            이름칸 = "&nbsp;&nbsp;&nbsp;" * 수준 + _html.escape(이름)
+            이름칸 = _html.escape(이름)
         몸 += (f'<tr{st_}><td class="lft">{이름칸}</td><td class="usd">{_칸(u / 환율 if 환율 > 0 else 0)}</td><td class="krw">{_칸(u)}</td>'
                f'<td>{_칸(k) if KR원장 is not None else "-"}</td><td>{_칸(u + k)}</td>'
                f'<td class="adj">{_칸(차)}</td><td class="adj">{_칸(대)}</td><td><b>{_칸(연)}</b></td>'
@@ -9301,6 +9303,16 @@ if 메뉴 == '연결 손익계산서':
         .wrap table.consotab td + td, .wrap table.consotab tbody td + td {{ border-left:1px solid #C9CED6; }}
         .wrap table.consotab thead th {{ border-left:1px solid rgba(255,255,255,.22); }}
         .wrap table.consotab td:last-child {{ font-size:12px; line-height:1.35; border-left:1px solid #C9CED6; }}
+        .wrap table.consotab td, .wrap table.consotab th {{ padding-top:6px !important; padding-bottom:6px !important; }}
+        .wrap table.consotab tr.total td:last-child, .wrap table.consotab tr.sub td:last-child {{ background:transparent; font-weight:400; color:{T['ink3']}; }}
+        .wrap table.consotab tr.sub td {{ color:{T['ink2']}; }}
+        .wrap table.consotab tr.sub td:first-child {{ padding-left:22px !important; }}
+        .wrap table.consotab tr.sub2 td:first-child {{ padding-left:40px !important; color:{T['ink3']}; }}
+        .wrap table.consotab tr.total td:first-child {{ padding-left:8px !important; }}
+        .wrap table.consotab tr.sub td:nth-child(8) {{ color:{T['ink']}; }}
+        .wrap table.consotab tr.total td.usd {{ background:#FCEFDC; color:#7A4A12; }}
+        .wrap table.consotab tr.sub td.usd {{ color:#9A6A32; }}
+        .wrap table.consotab tr.total td.adj {{ background:#E6F0FB; }}
         .wrap table.consotab tbody tr:last-child td {{ border-bottom:none; }}
         .wrap table.consotab thead th:first-child {{ border-left:none; }}
         .wrap table.consotab th.usdg {{ background:#FCEBD2 !important; color:#7A4A12 !important; border-bottom:1px solid #F1D3A8; }}
@@ -10692,7 +10704,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 _td = 'padding:3px 6px;border-bottom:1px solid ' + T['line']
                 _몸 = ''.join(
                     f'<tr><td style="{_td};text-align:left;overflow:hidden"><b style="white-space:nowrap">{_html.escape(거)}</b>'
-                    f'<div style="font-size:10.5px;color:{T["ink3"]};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{_html.escape(내)}">{_html.escape(내)}</div></td>'
+                    f'<div style="font-size:0.78em;font-weight:400;color:{T["ink3"]};white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="{_html.escape(내)}">{_html.escape(내)}</div></td>'
                     f'<td style="{_td};text-align:center;white-space:nowrap;font-weight:700;color:{T["accent"] if 성.startswith("고정") else T["ink3"]}">{_짧(성)}</td>'
                     + ''.join(f'<td style="{_td};text-align:right">{_f(v)}</td>' for v in 월)
                     + f'<td style="{_td};text-align:right;font-weight:700">{_f(합)}</td></tr>'
@@ -10704,7 +10716,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 _머 = f'padding:4px 6px;background:{T["navy"]};color:#FFFFFF;font-weight:600'
                 수수료설명 = (f'<li style="list-style:none;margin-left:-14px"><b>지급수수료 — 누구에게 · 무엇으로 · 매달 얼마</b> '
                             f'<span class="muted">(금액 큰 순 · 원장 적요 기준 · 단위 {단위K})</span>'
-                            f'<div class="scrollx" style="margin-top:6px"><table style="width:100%;border-collapse:collapse;font-size:11.5px;'
+                            f'<div class="scrollx" style="margin-top:6px"><table class="lined" style="width:100%;'
                             f'font-variant-numeric:tabular-nums;table-layout:fixed"><colgroup><col style="width:21%"><col style="width:7%">'
                             + f'<col style="width:{72 / (보고월 + 1):.2f}%">' * (보고월 + 1) + '</colgroup><thead><tr>'
                             f'<th style="{_머};text-align:left">거래처 · 내용</th>'
