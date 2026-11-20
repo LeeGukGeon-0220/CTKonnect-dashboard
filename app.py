@@ -10049,12 +10049,12 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           /* 월간 실적보고 엑셀 양식 모양 : 짙은 회색 머리 · 회색 구분 칸 · 세로 점선 · 가로는 묶음 위 실선만 */
           .wrap table.rpt {{ border-collapse:collapse; table-layout:fixed; margin-top:8px; width:100% !important;
                              border-top:1.5px solid {_진선}; border-bottom:1.5px solid {_진선}; border-radius:0 !important; }}
-          .wrap table.rpt th {{ font-size:15px; font-weight:800; padding:7px 4px !important; text-align:center;
+          .wrap table.rpt th {{ font-size:15px; font-weight:800; padding:5px 4px !important; text-align:center; line-height:1.35;
                                 background:{_머리} !important; color:#FFFFFF; border-radius:0 !important;
                                 border:none; border-left:1px dotted rgba(255,255,255,0.45); }}
           .wrap table.rpt thead tr:first-child th {{ border-bottom:1px dotted rgba(255,255,255,0.45); }}
           .wrap table.rpt th.rg {{ border-left:none; border-bottom:none !important; }}
-          .wrap table.rpt td {{ font-size:15px; padding:6px 8px !important; text-align:right; white-space:nowrap;
+          .wrap table.rpt td {{ font-size:15px; padding:4px 8px !important; line-height:1.4; text-align:right; white-space:nowrap;
                                 border:none; border-left:1px dotted {_점선}; color:{T['ink']}; background:transparent !important; }}
           .wrap table.rpt td.g {{ text-align:left; font-weight:800; background:{_회색} !important; border-left:none; }}
           .wrap table.rpt td.it {{ text-align:left; background:{_회색} !important; color:{T['ink']}; padding-left:10px !important; border-left:none; }}
@@ -11260,6 +11260,13 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                                if _최근 else f'{보고월}월 칸에 과제를 적어 올리시면 여기에 보입니다 (업무이관 · 조직 · 인력 · 프로세스 · 시스템)'),
                               _과제행, '조직운영안')
         효율화html += _기타섹션((BS밑자료 or {}).get('기타사항'))
+        _po칸 = lambda 해: (f'<div class="kpi-card"><div class="kpi-label">{해}년 예상 PO</div>'
+                           f'<div class="muted" style="min-height:40px;font-size:12.5px;margin-top:6px">내용을 정해 주시면 이곳에 채웁니다</div></div>')
+        효율화html = (f'{CARD_CSS}<div class="wrap" translate="no"><details class="fold" open>'
+                     f'<summary style="font-size:15px;font-weight:800;color:{T["ink"]};margin-bottom:6px">예상 PO '
+                     f'<span class="muted" style="font-size:12.5px;font-weight:400">{당해연도}년 · {당해연도 + 1}년</span></summary>'
+                     f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">{_po칸(당해연도 % 100)}{_po칸((당해연도 + 1) % 100)}</div>'
+                     f'</details></div>') + 효율화html
     손익html = f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>손익계산서 — {연도X}년 1~{보고월X}월 <span class="unitbadge">단위 {단위K}</span></h3>
         <div class="sub">{('비용은 양수 · <b>원가 기준(재고수불부)</b> : 매출액 → 변동비 → 공헌이익 → 고정비(제조간접비) → 매출이익 → 판관비(SR&amp;ED 차감 전 · 「판관비 합계」를 누르면 세부) → SR&amp;ED → 영업이익'
