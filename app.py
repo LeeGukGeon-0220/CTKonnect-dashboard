@@ -6909,15 +6909,15 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
     실 = 매.groupby(['줄', '월'])['v'].sum()
     해들 = [(연도, list(range(1, 결산월 + 1)), list(range(결산월 + 1, 13))), (다음, [], list(range(1, 13)))]
 
-    st.html(f'{CARD_CSS}<div class="wrap" translate="no"><div style="font-size:15px;font-weight:800;color:{T["ink"]};margin:10px 0 2px">'
-            f'예상 PO <span class="muted" style="font-size:12.5px;font-weight:400">{연도}년 1~{결산월}월 = 매출 실적(장부 매출 · 거래처별 상위 {상위N}곳) · '
-            f'{결산월 + 1}월부터 · {다음}년 = 예상 · 단위 USD</span></div></div>')
-    보이는곳 = st.container()
+    _바깥 = st.expander(f'**예상 PO** — {연도}년 1~{결산월}월 실적(장부 매출 · 거래처별 상위 {상위N}곳) · {결산월 + 1}월부터 · {다음}년 예상 · 단위 USD  (누르면 접고 펼칩니다)',
+                        expanded=True)
+    보이는곳 = _바깥.container()
 
     # ── 고치기 (접어 둠) : 예상 숫자 · 세부사항 글
     바뀜 = False
-    with st.expander('✏ 예상 · 세부사항 고치기 (칸을 눌러 적으면 바로 저장됩니다)', expanded=False):
-        for 해, 실적달, 예상달 in 해들:
+    with _바깥:
+      _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 적으면 바로 저장)', key='po_edit')
+      for 해, 실적달, 예상달 in (해들 if _고침 else []):
             칸 = str(해)
             이전 = 저장.get(칸, {})
             이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
@@ -6950,7 +6950,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
             if 새칸 != {'rows': 이전.get('rows', []), '메모': 이전.get('메모', '')}:
                 저장[칸] = 새칸
                 바뀜 = True
-        if os.name != 'nt':
+      if _고침 and os.name != 'nt':
             st.caption('웹에서 적은 내용은 이 웹 서버에만 잠시 남습니다 — 오래 남길 내용은 PC 대시보드에서 적고 「3. 웹사이트_업데이트」 를 해 주세요.')
     if 바뀜:
         try:
