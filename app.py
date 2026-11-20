@@ -734,6 +734,8 @@ def _표준화(df, 매핑표, 연도힌트):
     for c in ('활동분류(대분류)', '활동분류(소분류)', '활동세부', '분류상태', 'Description', 'Name', 'Balance'):
         if c not in df.columns:
             df[c] = np.nan
+    # 더존 거래처명 「CTK onnect」 는 「CTKonnect」 로 붙여 씁니다 (2026-11-20)
+    df['Name'] = df['Name'].map(lambda n: re.sub(r'(?i)\bCTK\s+onnect\b', 'CTKonnect', n) if isinstance(n, str) else n)
 
     def _보고항목(r):
         if r['분류'] != '판관비':
@@ -11135,6 +11137,27 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         꺾은선 = (f'<div class="cashline">'
                   f'{눈금}{축}{구간}{표시}</div>')
 
+        # ── 금융자산 투자 주석 : 현금흐름 「금융자산 투자」 줄의 거래 (2026-11-20)
+        _투자주석 = ''
+        try:
+            _투 = 자금상세[(자금상세['구분'].eq('INV')) & 자금상세['월'].le(보고월)].copy() if 자금상세 is not None else None
+            if _투 is not None and len(_투):
+                def _한줄(r):
+                    n = str(r['Name']) if str(r['Name']) not in ('nan', 'None') else ''
+                    d = str(r['Description']) if str(r['Description']) not in ('nan', 'None') else ''
+                    _기 = re.sub(r'^(주식회사|\(주\))\s*', '', n.split('(')[0]).strip()
+                    if _기 and d.startswith(_기):
+                        d = d[len(_기):].strip()
+                    d = re.sub(r'^\([^)]*\)\s*', '', d)          # 앞에 남은 (JPN) · (ditto works) 같은 괄호
+                    return (f'<li>{int(r["월"])}월 · <b>{_html.escape(n or "(거래처 미기재)")}</b>'
+                            + (f' — {_html.escape(d)}' if d else '')
+                            + f' <span class="muted">({_html.escape(str(r["계정과목"]))})</span> · {CK(r["영향"])}</li>')
+                _줄 = ''.join(_한줄(r) for _, r in _투.sort_values('월').iterrows())
+                _투자주석 = (f'<div class="sub" style="margin:8px 0 0;font-size:12.5px;line-height:1.7">'
+                            f'<b>※ 금융자산 투자 내역</b> — 1~{보고월}월 합계 {CK(float(_투["영향"].sum()))} {단위K} '
+                            f'(현금이 나간 금액은 괄호)<ul style="margin:2px 0 0;padding-left:18px;font-size:12.5px">{_줄}</ul></div>')
+        except Exception:
+            _투자주석 = ''
         예상글 = (f'{달표(자금예상월[0])} ~ {달표(자금예상월[-1])}' if 자금예상월 else '')
         예상안내 = ''
         예상설명 = ('' if not 예상월들 else
@@ -11223,6 +11246,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         {''.join(f'<th>{달이름(m)}</th>' for m in 자금예상월)}
         </tr></thead>
         <tbody>{자금rows}</tbody></table></div></div>
+        {_투자주석}
         <div class="cfin">{가정html}
         {고변html}</div></div>
       <details class="calcnote fold" style="margin-top:14px"><summary><b>현금흐름 ({(당해연도 + 1) % 100}년 예상)</b>
