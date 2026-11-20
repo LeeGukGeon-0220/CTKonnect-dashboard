@@ -11187,9 +11187,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <style>
           .wrap .cfcard {{ container-type:inline-size; }}
           .wrap .cfcard .cfin {{ container-type:inline-size; }}
-          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:15.5px; padding-left:2px !important; padding-right:7px !important;
-              padding-top:9px !important; padding-bottom:9px !important; letter-spacing:-0.2px; }}
-          .wrap table.cfcomp thead th {{ font-size:15px; }}
+          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:13.5px; padding-left:2px !important; padding-right:7px !important;
+              padding-top:8px !important; padding-bottom:8px !important; letter-spacing:-0.1px; }}
+          .wrap table.cfcomp thead th {{ font-size:13.5px; }}
           .wrap table.cfcomp th .fcs {{ font-size:12px; }}
           .wrap .cfcard .cashline {{ height:clamp(126px, 12cqw, 240px); margin-bottom:clamp(12px, 1cqw, 20px); }}
           .wrap .cfcard .cashline .cval {{ font-size:clamp(10px, 0.7cqw, 14px); }}
