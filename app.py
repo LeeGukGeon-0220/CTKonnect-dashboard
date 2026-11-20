@@ -6883,9 +6883,9 @@ def _구분세부패널(대상, 값컬럼, 부호, 상위N, 집계, 총액):
 
 def 예상PO칸(원장, 연도, 결산월, 상위N=5):
     """예상 PO (2026-11-20)
-    · 당해 : 1~결산월 = 원장 매출 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 = 예상 (직접 입력)
-    · 다음 해 : 1~12월 예상 (직접 입력, 거래처 줄도 더할 수 있음)
-    · 오른쪽 : 세부사항 글
+    · 당해 : 1~결산월 = 원장 매출 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 = 예상
+    · 다음 해 : 1~12월 예상 · 오른쪽 : 세부사항 글
+    · 보이는 표는 실적현황 표와 같은 모양 — 예상 · 글은 아래 「예상 · 세부사항 고치기」 에서 적음
     입력한 예상 · 글은 _보관자료/예상PO.json 에 바로 저장 (웹은 「3. 웹사이트_업데이트」 때 잠가 함께 올림)"""
     자리 = os.path.join(보관폴더, '예상PO.json')
     try:
@@ -6904,64 +6904,54 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
     매['거'] = 매['거'].map(lambda n: _대[n.upper()])
     누 = 매.groupby('거')['v'].sum().sort_values(ascending=False)
     위 = [n for n in 누.index[:상위N]]
+    기본줄 = 위 + (['기타'] if len(누) > 상위N else [])
     매['줄'] = 매['거'].where(매['거'].isin(위), '기타')
     실 = 매.groupby(['줄', '월'])['v'].sum()
+    해들 = [(연도, list(range(1, 결산월 + 1)), list(range(결산월 + 1, 13))), (다음, [], list(range(1, 13)))]
 
     st.html(f'{CARD_CSS}<div class="wrap" translate="no"><div style="font-size:15px;font-weight:800;color:{T["ink"]};margin:10px 0 2px">'
-            f'▾ 예상 PO <span class="muted" style="font-size:12.5px;font-weight:400">{연도}년 1~{결산월}월 = 매출 실적(거래처별 상위 {상위N}곳) · '
-            f'{결산월 + 1}월부터 = 예상 (칸을 눌러 적으면 바로 저장) · {다음}년 = 예상 · 단위 USD · 오른쪽에 세부사항</span></div></div>')
+            f'예상 PO <span class="muted" style="font-size:12.5px;font-weight:400">{연도}년 1~{결산월}월 = 매출 실적(장부 매출 · 거래처별 상위 {상위N}곳) · '
+            f'{결산월 + 1}월부터 · {다음}년 = 예상 · 단위 USD</span></div></div>')
+    보이는곳 = st.container()
+
+    # ── 고치기 (접어 둠) : 예상 숫자 · 세부사항 글
     바뀜 = False
-
-    def _표(해, 실적달, 예상달, 기본줄):
-        nonlocal 바뀜
-        칸 = str(해)
-        이전 = 저장.get(칸, {})
-        이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
-        줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
-        행 = []
-        for n in 줄이름:
-            r = {'거래처': n}
-            for m in 실적달:
-                _v = round(float(실.get((n, m), 0.0)))
-                r[f'{m}월'] = (f'({-_v:,})' if _v < 0 else f'{_v:,}') if _v else '-'      # 실적은 글자로 (0 은 -)
+    with st.expander('✏ 예상 · 세부사항 고치기 (칸을 눌러 적으면 바로 저장됩니다)', expanded=False):
+        for 해, 실적달, 예상달 in 해들:
+            칸 = str(해)
+            이전 = 저장.get(칸, {})
+            이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
+            줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
+            df = pd.DataFrame([{'거래처': n, **{f'{m}월': float(이전줄.get(n, {}).get(str(m)) or 0.0) for m in 예상달}}
+                               for n in 줄이름], columns=['거래처'] + [f'{m}월' for m in 예상달])
+            설정 = {'거래처': st.column_config.TextColumn('거래처', width='medium')}
             for m in 예상달:
-                v = 이전줄.get(n, {}).get(str(m))
-                r[f'{m}월 예상'] = float(v) if v not in (None, '') else 0.0
-            행.append(r)
-        df = pd.DataFrame(행, columns=['거래처'] + [f'{m}월' for m in 실적달] + [f'{m}월 예상' for m in 예상달])
-        for m in 예상달:
-            df[f'{m}월 예상'] = pd.to_numeric(df[f'{m}월 예상'], errors='coerce').fillna(0.0).astype('float64')
-        설정 = {'거래처': st.column_config.TextColumn('거래처', width='medium')}
-        for m in 실적달:
-            설정[f'{m}월'] = st.column_config.TextColumn(f'{m}월', disabled=True, alignment='right')
-        for m in 예상달:
-            설정[f'{m}월 예상'] = st.column_config.NumberColumn(f'{m}월 (예상)', format='localized', step=1)
-        왼, 오른 = st.columns([3, 1], gap='small')
-        with 왼:
-            st.markdown(f'**{해}년**' + (f' — 1\\~{실적달[-1]}월 실적 · {예상달[0]}\\~12월 예상' if 실적달 and 예상달 else ' — 예상'))
-            새 = st.data_editor(df, key=f'po_{해}', num_rows='dynamic', hide_index=True, width='stretch', column_config=설정)
-            합실 = float(sum(실.get((n, m), 0.0) for n in 기본줄 for m in 실적달)) if 실적달 else 0.0
-            합예 = float(새[[f'{m}월 예상' for m in 예상달]].fillna(0).sum().sum()) if 예상달 else 0.0
-            st.caption((f'실적 {합실:,.0f} + ' if 실적달 else '') + f'예상 {합예:,.0f}' + (f' = {해}년 {합실 + 합예:,.0f}' if 실적달 else '') + ' USD')
-        with 오른:
-            st.markdown('**세부사항**')
-            글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{해}', height=230,
-                              label_visibility='collapsed', placeholder='예상 근거 · 거래처별 진행 상황 등을 적어 주세요')
-        새줄 = []
-        for _, r in 새.iterrows():
-            n = str(r.get('거래처') or '').strip()
-            if not n or n == 'nan':
-                continue
-            값 = {str(m): (None if pd.isna(r.get(f'{m}월 예상')) or float(r.get(f'{m}월 예상')) == 0 else float(r.get(f'{m}월 예상'))) for m in 예상달}
-            if n in 기본줄 or any(v is not None for v in 값.values()):
-                새줄.append({'거래처': n, **값})
-        새칸 = {'rows': 새줄, '메모': 글 or ''}
-        if 새칸 != {'rows': 이전.get('rows', []), '메모': 이전.get('메모', '')}:
-            저장[칸] = 새칸
-            바뀜 = True
-
-    _표(연도, list(range(1, 결산월 + 1)), list(range(결산월 + 1, 13)), 위 + (['기타'] if len(누) > 상위N else []))
-    _표(다음, [], list(range(1, 13)), 위 + (['기타'] if len(누) > 상위N else []))
+                설정[f'{m}월'] = st.column_config.NumberColumn(f'{m}월 예상', format='localized', step=1)
+            왼, 오른 = st.columns([3, 1], gap='small')
+            with 왼:
+                st.markdown(f'**{해}년 예상** ({예상달[0]}\\~{예상달[-1]}월)')
+                새 = st.data_editor(df, key=f'po_{해}', num_rows='dynamic', hide_index=True, width='stretch', column_config=설정)
+            with 오른:
+                st.markdown(f'**{해}년 세부사항**')
+                글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{해}', height=160,
+                                  label_visibility='collapsed', placeholder='예상 근거 · 거래처별 진행 상황 등을 적어 주세요')
+            새줄 = []
+            for _, r in 새.iterrows():
+                n = str(r.get('거래처') or '').strip()
+                if not n or n == 'nan':
+                    continue
+                값 = {}
+                for m in 예상달:
+                    v = r.get(f'{m}월')
+                    값[str(m)] = None if (v is None or pd.isna(v) or float(v) == 0) else float(v)
+                if n in 기본줄 or any(v is not None for v in 값.values()):
+                    새줄.append({'거래처': n, **값})
+            새칸 = {'rows': 새줄, '메모': 글 or ''}
+            if 새칸 != {'rows': 이전.get('rows', []), '메모': 이전.get('메모', '')}:
+                저장[칸] = 새칸
+                바뀜 = True
+        if os.name != 'nt':
+            st.caption('웹에서 적은 내용은 이 웹 서버에만 잠시 남습니다 — 오래 남길 내용은 PC 대시보드에서 적고 「3. 웹사이트_업데이트」 를 해 주세요.')
     if 바뀜:
         try:
             os.makedirs(보관폴더, exist_ok=True)
@@ -6969,8 +6959,73 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
                 json.dump(저장, f, ensure_ascii=False, indent=1)
         except OSError as e:
             st.caption(f'저장하지 못했습니다 — {e}')
-    if os.name != 'nt':
-        st.caption('웹에서 적은 내용은 이 웹 서버에만 잠시 남습니다 — 오래 남길 내용은 PC 대시보드에서 적고 「3. 웹사이트_업데이트」 를 해 주세요.')
+
+    # ── 보이는 표 (실적현황 표와 같은 모양)
+    _머리 = '#3A3A3A' if 밝게 else '#2A2F3A'
+    _회색 = '#E8E8E8' if 밝게 else 'rgba(255,255,255,0.07)'
+    _진선 = '#222222' if 밝게 else T['ink3']
+    _점선 = '#C8C8C8' if 밝게 else 'rgba(255,255,255,0.18)'
+    _점선진 = '#8A8A8A' if 밝게 else 'rgba(255,255,255,0.35)'
+    _예상바탕 = '#F3F6FB' if 밝게 else 'rgba(255,255,255,0.04)'
+    css = f"""<style>
+      .wrap table.potab {{ border-collapse:collapse; table-layout:fixed; width:100%; margin-top:6px;
+                           border-top:1.5px solid {_진선}; border-bottom:1.5px solid {_진선}; }}
+      .wrap table.potab th {{ font-size:14px; font-weight:800; padding:5px 4px !important; text-align:center; line-height:1.35;
+                             background:{_머리} !important; color:#FFFFFF; border-radius:0 !important;
+                             border:none; border-left:1px dotted rgba(255,255,255,0.45); }}
+      .wrap table.potab thead tr:first-child th {{ border-bottom:1px dotted rgba(255,255,255,0.45); }}
+      .wrap table.potab th.rg {{ border-left:none; }}
+      .wrap table.potab td {{ font-size:14px; padding:4px 6px !important; line-height:1.4; text-align:right; white-space:nowrap;
+                             border:none; border-left:1px dotted {_점선}; color:{T['ink']}; background:transparent !important; }}
+      .wrap table.potab td.it {{ text-align:left; background:{_회색} !important; border-left:none; padding-left:10px !important;
+                                overflow:hidden; text-overflow:ellipsis; }}
+      .wrap table.potab td.fc {{ background:{_예상바탕} !important; }}
+      .wrap table.potab td.gs, .wrap table.potab th.gs {{ border-left:1px dotted {_점선진}; }}
+      .wrap table.potab tr.b td {{ font-weight:800; border-top:1.5px solid {_진선}; }}
+      .wrap .ponote {{ border:1px solid {T['line']}; border-radius:10px; background:{T['panel']}; padding:10px 12px;
+                       font-size:13.5px; line-height:1.6; color:{T['ink']}; white-space:pre-wrap; min-height:120px; flex:1 1 auto;
+                       box-sizing:border-box; }}
+    </style>"""
+    with 보이는곳:
+        for 해, 실적달, 예상달 in 해들:
+            이전줄 = {r.get('거래처', ''): r for r in 저장.get(str(해), {}).get('rows', [])}
+            줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
+            예 = lambda n, m: float(이전줄.get(n, {}).get(str(m)) or 0.0)
+            칸들 = [(m, False) for m in 실적달] + [(m, True) for m in 예상달]
+            합칸 = {k: 0.0 for k in range(len(칸들))}
+            몸 = ''
+            for n in 줄이름:
+                vs = [(float(실.get((n, m), 0.0)) if not f else 예(n, m)) for m, f in 칸들]
+                for i, v in enumerate(vs):
+                    합칸[i] += v
+                몸 += (f'<tr><td class="it">{_html.escape(str(n))}</td>'
+                       + ''.join(f'<td class="{"fc" if 칸들[i][1] else ""}{" gs" if 칸들[i][1] and (i == 0 or not 칸들[i - 1][1]) else ""}">{금액(v)}</td>'
+                                 for i, v in enumerate(vs))
+                       + f'<td class="gs"><b>{금액(sum(vs))}</b></td></tr>')
+            합 = [합칸[i] for i in range(len(칸들))]
+            몸 += (f'<tr class="b"><td class="it">합계</td>'
+                   + ''.join(f'<td class="{"fc" if 칸들[i][1] else ""}{" gs" if 칸들[i][1] and (i == 0 or not 칸들[i - 1][1]) else ""}">{금액(v)}</td>'
+                             for i, v in enumerate(합))
+                   + f'<td class="gs">{금액(sum(합))}</td></tr>')
+            머리1 = ('<th rowspan="2" class="rg">거래처</th>'
+                     + (f'<th colspan="{len(실적달)}">실적 (1~{실적달[-1]}월)</th>' if 실적달 else '')
+                     + f'<th colspan="{len(예상달)}" class="gs">예상 ({예상달[0]}~{예상달[-1]}월)</th>'
+                     + f'<th rowspan="2" class="gs">{해}년<br>합계</th>')
+            머리2 = ''.join(f'<th class="{"gs" if (f and (i == 0 or not 칸들[i - 1][1])) else ""}">{m}월</th>' for i, (m, f) in enumerate(칸들))
+            n칸 = len(칸들) + 1
+            왼, 오른 = st.columns([3, 1], gap='small')
+            with 왼:
+                st.html(f'{CARD_CSS}<div class="wrap fillcol" translate="no">{css}<div class="card" style="margin-bottom:10px">'
+                        f'<h3>{해}년 예상 PO <span class="unitbadge">단위 USD</span></h3>'
+                        f'<div class="scrollx"><table class="potab"><colgroup><col style="width:15%">'
+                        + f'<col style="width:{85 / n칸:.3f}%">' * n칸 + '</colgroup>'
+                        f'<thead><tr>{머리1}</tr><tr>{머리2}</tr></thead><tbody>{몸}</tbody></table></div></div></div>')
+            with 오른:
+                글 = 저장.get(str(해), {}).get('메모', '')
+                st.html(f'{CARD_CSS}<div class="wrap fillcol" translate="no">{css}<div class="card" style="margin-bottom:10px;display:flex;flex-direction:column">'
+                        f'<h3>{해}년 세부사항</h3><div class="ponote">'
+                        + (_html.escape(글) if 글 else f'<span class="muted">아래 「예상 · 세부사항 고치기」 에서 적으면 여기에 보입니다</span>')
+                        + '</div></div></div>')
 
 
 def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
