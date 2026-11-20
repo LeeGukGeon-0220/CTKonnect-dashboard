@@ -7757,8 +7757,24 @@ def _KR분개장읽기(바이트):
                if any(str(x).replace('\n', '') == '계정과목' for x in raw.iloc[i].tolist()))
     d = pd.read_excel(xls, sheet_name=시트, header=머리)
     d.columns = [str(c).replace('\n', '').strip() for c in d.columns]
-    d = d[d['일자'].map(lambda x: hasattr(x, 'year') or bool(re.match(r'^\d{4}-\d{2}-\d{2}', str(x))))].copy()
-    d['일자'] = pd.to_datetime(d['일자'])
+    # 연도 — 머리 줄의 「기 간 : 2026년 01월 01일 ~ …」 (일자가 「01/01」 처럼 월/일만 있을 때 씀)
+    _머리글 = ' '.join(str(x) for x in raw.iloc[:머리].values.ravel() if str(x) != 'nan')
+    _m연 = re.search(r'(\d{4})\s*년', _머리글)
+    _연 = int(_m연.group(1)) if _m연 else None
+    def _날(x):
+        if hasattr(x, 'year'):
+            return pd.Timestamp(x)
+        t = str(x).strip()
+        if re.match(r'^\d{4}[-./]\d{1,2}[-./]\d{1,2}', t):
+            return pd.to_datetime(t[:10].replace('.', '-').replace('/', '-'), errors='coerce')
+        m = re.match(r'^(\d{1,2})[/.-](\d{1,2})$', t)
+        if m and _연:
+            return pd.Timestamp(_연, int(m.group(1)), int(m.group(2)))
+        return pd.NaT
+    d['일자'] = d['일자'].map(_날)
+    d = d[d['일자'].notna()].copy()
+    if d.empty:
+        raise ValueError('분개장에서 날짜를 읽지 못했습니다 — 「일자」 칸과 머리의 「기 간」 줄을 확인해 주세요.')
     d['코드'] = pd.to_numeric(d['계정코드'], errors='coerce').fillna(0).astype(int).astype(str)
     d['계정'] = d['코드'] + ' ' + d['계정과목'].astype(str).str.strip()
     d['차'] = pd.to_numeric(d['차변'], errors='coerce').fillna(0.0)
@@ -8251,6 +8267,39 @@ if 메뉴 == '실적보고 엑셀작성':
     통장 파일은 ① <b style="color:{T['ink']}">원장의 통장 거래와 맞는지 대사</b>(아래 표 — 올리면 바로 나옵니다) 와
     ② 「채권채무」 시트의 <b style="color:{T['ink']}">결산 후 회수 · 지급</b>(원장이 끝난 날 뒤 입출금)에 씁니다.
   </div></div>""")
+    def _최종US():
+        _p = _자료실최신패키지()
+        if _p:
+            with open(_p, 'rb') as _f:
+                return _f.read(), os.path.basename(_p), os.path.getmtime(_p)
+        if os.path.exists(CACHE_PATH):
+            with open(CACHE_PATH, 'rb') as _f:
+                return _f.read(), (쓰던파일이름() or 'CTKonnect_연결패키지.xlsx'), os.path.getmtime(CACHE_PATH)
+        return None, '', 0
+    _ub, _un, _ut = _최종US()
+    try:
+        _kb, _kn = _KR패키지바이트(분개장보기=False)
+    except Exception:
+        _kb, _kn = None, ''
+    def _짧은이름(n):
+        m = re.search(r'(\d{1,2})월말_(v\d+)', str(n))
+        return f'{m.group(1)}월말 {m.group(2)}' if m else '최종본'
+    st.caption('작성한 최종 연결패키지 내려받기 — 언제 만드셨든 마지막 버전을 그대로 드립니다')
+    _d1, _d2, _d3 = st.columns(3, gap='small')
+    _엑셀 = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    with _d1:
+        if _ub:
+            st.download_button(f'⤓  미국 CTKonnect {_짧은이름(_un)} 내려받기', data=_ub, file_name=_un, mime=_엑셀,
+                               width='stretch', type='primary', key='dl_final_us')
+        else:
+            st.button('⤓  미국 CTKonnect — 아직 없음', width='stretch', disabled=True, key='dl_final_us_x')
+    with _d2:
+        if _kb:
+            st.download_button(f'⤓  한국 씨티케이커넥트 {_짧은이름(_kn)} 내려받기', data=_kb, file_name=_kn or '씨티케이커넥트_연결패키지.xlsx',
+                               mime=_엑셀, width='stretch', type='primary', key='dl_final_kr')
+        else:
+            st.button('⤓  한국 씨티케이커넥트 — 아직 없음', width='stretch', disabled=True, key='dl_final_kr_x')
+    st.write('')
     칸1, 칸2, 칸3 = st.columns(3, gap='small')
     with 칸1:
         st.caption('① 퀵북 원장 (General Ledger) 또는 씨티케이커넥트 더존 분개장 · 필수')
