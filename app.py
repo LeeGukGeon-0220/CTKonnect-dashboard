@@ -167,7 +167,7 @@ html, body,
     color: {T['ink']};
     padding-top: 1.6rem !important; padding-bottom: 2.5rem !important;
     padding-left: 0.9rem !important; padding-right: 1.2rem !important;
-    max-width: 1600px !important; margin-left: 0 !important; margin-right: auto !important; }}
+    max-width: 2000px !important; margin-left: 0 !important; margin-right: auto !important; }}
 /* 오른쪽 위 Streamlit 메뉴(점 세 개 ⋮)는 다시 보이게 둡니다 — 공유·인쇄·설정이 거기 있습니다.
    맨 위 무지개 줄만 감추고, 머리줄은 배경 없이 띄워 화면은 그대로 깔끔하게 둡니다. */
 [data-testid="stDecoration"] {{ display: none !important; }}
@@ -10161,7 +10161,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         _백만 = 법인 == '씨티케이커넥트'
         CK = (lambda v, 괄호=True: '-' if v is None or pd.isna(v) else
               음수표기(f'{v / 1_000_000:,.0f}')) if _백만 else globals()['CK']
-        W, H, 위, 아래, 왼, 오른 = 1000, 175, 30, 36, 20, 170   # 높이 30% 줄임 (250 → 175, 2026-10-29)
+        W, H, 위, 아래, 왼, 오른 = 1000, 175, 30, 36, 20, 20    # 높이 30% 줄임 (2026-10-29) · 누적 막대 뺌 (2026-11-20)
         폭 = W - 왼 - 오른
         n = max(len(months), 1)
         최대 = max([*매출25, *매출26, 1]) * 1.12
@@ -10178,22 +10178,11 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 g += f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="4.5" fill="#fff" stroke="{색}" stroke-width="2.5"/>'
                 다른 = (매출25 if 당해 else 매출26)[i]
                 ty = y(v) - 11 if v >= 다른 else y(v) + 20
-                g += (f'<text x="{x(i):.1f}" y="{ty:.1f}" text-anchor="middle" font-size="14" '
-                      f'font-weight="700" fill="{색 if 당해 else "#4b5563"}" stroke="#fff" stroke-width="5" '
+                g += (f'<text x="{x(i):.1f}" y="{ty:.1f}" text-anchor="middle" font-size="15" '
+                      f'font-weight="700" fill="{"#111827" if 당해 else "#4b5563"}" stroke="#fff" stroke-width="5" '
                       f'stroke-linejoin="round" paint-order="stroke">{CK(v)}</text>')
         for i, m in enumerate(months):
             g += f'<text x="{x(i):.1f}" y="{H - 12}" text-anchor="middle" font-size="14" fill="#6b7280">{m}월</text>'
-        구분x = W - 오른 + 18
-        g += f'<line x1="{구분x}" x2="{구분x}" y1="{위 - 10}" y2="{H - 30}" stroke="#d1d5db"/>'
-        누최대 = max(누적25, 누적26, 1) * 1.15
-        for j, (v, 색) in enumerate((((누적26, T['accent']),) if 전년없음 else ((누적25, SLATE), (누적26, T['accent'])))):
-            bx = 구분x + 40 + j * 50
-            top = 위 + (H - 위 - 아래) * (1 - max(v, 0) / 누최대)
-            g += f'<rect x="{bx}" y="{top:.1f}" width="26" height="{H - 아래 - top:.1f}" rx="4" fill="{색}"/>'
-            g += (f'<text x="{bx + 13}" y="{top - 7:.1f}" text-anchor="middle" font-size="14" '
-                  f'font-weight="700" fill="#111827">{CK(v)}</text>')
-        g += (f'<text x="{구분x + 78}" y="{H - 12}" text-anchor="middle" font-size="14" '
-              f'font-weight="700" fill="#111827">1~{보고월}월 누적</text>')
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
                f'font-family="Malgun Gothic, Pretendard, sans-serif">{g}</svg>')
         return (f'<img alt="월별 매출 추이" style="width:100%;height:auto;display:block;margin-top:6px" '
@@ -10314,17 +10303,19 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 return ('+' if v > 0 else '−') + CK(abs(v))
             return CK(v)
         cells = ''.join(f'<td class="{색}">{f(v)}</td>' for v in 값들)
+        총 = sum(값들)
+        # 누적(1~실적 마지막 달)은 실적 달 바로 뒤에 둡니다 (2026-11-20)
+        cells += (f'<td class="{색}" style="background:{T["navysoft"]};border-left:1.5px solid {T["ink3"]};'
+                  f'border-right:1.5px solid {T["ink3"]}"><b>{f(총)}</b></td>')
         # 앞으로 올 달(예상) 칸 — 가정을 깐 줄만 채우고, 나머지는 비워 둡니다
         칸값 = '-' if 예상 is None else f(예상)
         cells += ''.join(f'<td class="fc {색}">{칸값}</td>' for _ in 예상월들)
-        총 = sum(값들)
         return (f'<tr{cls}><td class="name" style="white-space:nowrap;overflow:hidden;'
                 f'text-overflow:ellipsis" title="{re.sub(r"<[^>]+>", "", 이름칸(이름, 산식))}">'
                 f'{"&nbsp;&nbsp;" * max(들여 - 1, 0)}'
                 + (f'<label class="tog" for="pl-sga">{이름칸(이름, 산식)}<span class="caret">▸</span></label>'
                    if 토글 else 이름칸(이름, 산식))
-                + f'</td>{cells}'
-                f'<td class="{색}"><b>{f(총)}</b></td></tr>')
+                + f'</td>{cells}</tr>')
 
     # 실적 뒤 ~ 연말까지 얼마를 깔았는지, 줄 이름 옆에 한 줄로 적어 둡니다 (30자 안쪽)
     달수예 = len(예상월들)
@@ -10909,14 +10900,11 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
        <div>{_실적표html}</div>
        <div style="display:flex; flex-direction:column; gap:14px; min-width:0">
         <div class="card"><h3>월별 매출 추이 <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
-          <div class="sub">{(f'1~{보고월}월 · 맨 오른쪽 <b>1~{보고월}월 누적</b> {CK(누적26)} <span class="muted">(누적 막대 높이는 월별과 다른 기준)</span>') if 전년없음 else
-            (f'1~{보고월}월 · {전년연도}년 동월 비교 &nbsp;|&nbsp; 맨 오른쪽 <b>1~{보고월}월 누적</b> = {전년연도}년 {CK(누적25)} ↔ {당해연도}년 {CK(누적26)}'
-             '<span class="muted">(같은 기간끼리 견줍니다 · 누적 막대 높이는 월별과 다른 기준)</span>')}</div>
+          <div class="sub">{f'1~{보고월}월' if 전년없음 else f'1~{보고월}월 · {전년연도}년 동월 비교'}</div>
           {bars_line}
           <div class="legend">{'' if 전년없음 else f'<span><span class="sw" style="background:{SLATE};"></span> {전년연도}년</span>'}
           <span><span class="sw" style="background:{T['accent']};"></span> {당해연도}년</span></div></div>
-        <div class="card"><h3>매출액 구성 <span class="unitbadge">단위 {단위K}</span></h3>
-          <div class="sub">1~{보고월}월 누적 · 손익 계정과목 기준</div>{mix_html}</div>
+        <div class="card"><h3>매출액 구성 (누적) <span class="unitbadge">단위 {단위K}</span></h3>{mix_html}</div>
        </div>
       </div>
       <style>@media (max-width:1100px) {{ .wrap .rptgrid {{ grid-template-columns:1fr !important; }} }}</style>
@@ -11235,8 +11223,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <input type="checkbox" class="togbox" id="pl-sga">
         <div class="scrollx"><table class="lined" {표스타일}>{콜그룹}<thead><tr><th>구분</th>
         {''.join(f'<th>{m}월</th>' for m in monthsX)}
-        {''.join(f'<th class="fc">{m}월<br><span class="fcs">예상</span></th>' for m in 예상월들)}
-        <th>누적</th></tr></thead>
+        <th style="background:{T['navy7']}">누적<br><span class="fcs" style="font-size:11px;font-weight:600;opacity:.85">1~{보고월X}월</span></th>
+        {''.join(f'<th class="fc">{m}월<br><span class="fcs">예상</span></th>' for m in 예상월들)}</tr></thead>
         <tbody>{rows}</tbody></table></div>{주석html}</div></div>"""
     # ── 품목군별 손익 (약식) — 원가 기준 손익을 Resin · Straw · Cutlery 로 나눔 (2026-10-27 요청)
     품목군html = ''
