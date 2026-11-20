@@ -339,7 +339,7 @@ h1, h2, h3, h4 {{ color: {T['headink']} !important; font-weight: 800 !important;
   /* 카드 위에 얇은 띠 — 첫 칸만 주황으로 눈에 띄게 합니다 */
   .wrap .kpi-card::before {{ content:''; display:block; height:3px; margin:0 -17px 13px;
               background:{T['navyline']}; }}
-  .wrap .kpi-row .kpi-card:first-child::before {{ background:{T['accent']}; }}
+  /* 첫 카드 주황 윗줄은 뺌 (2026-11-20) */
   .wrap .kpi-label {{ font-size:13.5px; font-weight:700; color:{T['headink']}; margin-bottom:10px;
               letter-spacing:-.01em; }}
   .wrap .kpi-value {{ font-size:34px; font-weight:800; color:{T['ink']};
@@ -647,7 +647,11 @@ CARD_CSS = ''  # (아래 f-string 들과의 호환을 위해 빈 값으로 둡�
 
 매출계정 = ['제품매출', '기타매출', '용역수익', '상품매출', '용역매출']
 매출원가계정 = ['제품매출원가', '상품매출원가', '용역매출원가', '패키지매출원가', '기타매출원가']   # 2026-11-03 : 씨티케이커넥트 용역매출원가
-영업외계정 = ['이자비용', '이자수익', '잡손실', '잡이익', '외환차손익', '외화환산손익', '세금환급', '수수료수익']
+영업외계정 = ['이자비용', '이자수익', '잡손실', '잡이익', '외환차손익', '외화환산손익', '세금환급', '수수료수익',
+             # 씨티케이커넥트 전년(2025) 결산 계정 (2026-11-20)
+             '파생상품거래이익', '파생상품거래손실', '파생상품평가이익', '파생상품평가손실', '사용권자산처분이익',
+             '유형자산처분이익', '유형자산처분손실', '무형자산처분손실', '사채상환이익', '기부금',
+             '관계기업투자자산평가손실', '관계기업투자자산손상차손']
 판관비항목 = ['인건비성 항목', '커미션 비용', '외부용역', '건물관리비', '차량유지비', 'ICT',
              '출장비', '운반 및 창고료', '소모성경비', '기타관리경비']   # CTKonnect : 상각비 없음 (2026-10-29)
 ACT2ITEM = {'인건비성 항목': '인건비성 항목', '커미션 비용': '커미션 비용', '외부용역': '외부용역',
@@ -6881,6 +6885,87 @@ def _구분세부패널(대상, 값컬럼, 부호, 상위N, 집계, 총액):
             f'<tbody>{아래}</tbody></table></div>')
 
 
+def KR전년자료경로():
+    """씨티케이커넥트 전년(2025) 월별 손익 — 「…전년자료_씨티케이커넥트…xlsx」 (전년 연결패키지 · IS-당기 시트).
+    PC : 자료실 어디든 · 웹 : 「3. 웹사이트_업데이트」 가 잠가 올린 것을 연 _작업중/전년자료_KR.xlsx"""
+    후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+            if '전년자료' in os.path.basename(f) and '씨티케이커넥트' in os.path.basename(f)
+            and not os.path.basename(f).startswith('~$')]
+    if 후보:
+        return max(후보, key=os.path.getmtime)
+    return '_작업중/전년자료_KR.xlsx' if os.path.exists('_작업중/전년자료_KR.xlsx') else None
+
+
+@st.cache_data(show_spinner=False, max_entries=2)
+def _KR전년원장캐시(경로, 시각, 매핑키, 연도):
+    return _KR전년원장만들기(경로, dict(매핑키), 연도)
+
+
+def _KR전년원장만들기(경로, 매핑쌍, 연도):
+    """전년 연결패키지 「IS-당기」(계정과목 × 1~12월) → 원장 모양(계정별 · 월별 한 줄)으로 바꿉니다 (2026-11-20).
+    계정 이름은 BS_IS_매핑의 더존 계정(예 : 801 임원급여(판))에 맞추고, 매핑에 없는 계정은 「25 계정명」 으로 만들어
+    시트의 「CTK 연결 계정과목」 칸 이름으로 붙입니다. 매출 · 영업외수익은 대변, 비용은 차변."""
+    import openpyxl as _ox
+    wb = _ox.load_workbook(경로, read_only=True, data_only=True)
+    if 'IS-당기' not in wb.sheetnames:
+        return None, {}
+    ws = wb['IS-당기']
+    def _이름만(k):
+        n = re.sub(r'^\d+\s*', '', str(k))
+        return re.sub(r'\((판|제|분|기업업무추진비)\)', '', n).replace(' ', '')
+    이름코드 = {}
+    for k, (bsis, kor) in 매핑쌍.items():
+        if bsis == 'IS':
+            이름코드.setdefault(_이름만(k), k)
+    바꿈 = {'외환차익': '외환차손익', '외환차손': '외환차손익', '외화환산이익': '외화환산손익', '외화환산손실': '외화환산손익'}
+    구역, 줄, 새매핑 = None, [], {}
+    재고줄 = ('기초상품재고액', '당기상품매입액', '타계정으로대체액', '기말상품재고액',
+              '기초제품재고액', '당기제품제조원가', '기말제품재고액')
+    for r in ws.iter_rows(min_row=7, values_only=True):
+        이름 = str(r[0] or '').strip()
+        if not 이름:
+            continue
+        if re.match(r'^[ⅠⅡⅢⅣⅤⅥⅦⅧⅨⅩ]\.', 이름):
+            구역 = ('수익' if ('매출액' in 이름 or '영업외수익' in 이름) else
+                    '비용' if ('매출원가' in 이름 or '판매비' in 이름 or '영업외비용' in 이름 or '법인세등' in 이름) else None)
+            continue
+        if 구역 is None or 이름 in 재고줄:
+            continue
+        값들 = [float(v) if isinstance(v, (int, float)) else 0.0 for v in r[2:14]]
+        if not any(abs(v) > 0.5 for v in 값들):
+            continue
+        코드 = 이름코드.get(_이름만(이름))
+        if 코드 is None:
+            코드 = f'25 {이름}'
+            연결 = str(r[19]).strip() if len(r) > 19 and r[19] else 이름
+            새매핑[코드.lower()] = ('IS', 바꿈.get(연결, 바꿈.get(이름, 연결)))
+        for m, v in enumerate(값들, start=1):
+            if abs(v) < 0.5:
+                continue
+            차, 대 = ((0.0, v) if v >= 0 else (-v, 0.0)) if 구역 == '수익' else ((v, 0.0) if v >= 0 else (0.0, -v))
+            줄.append({'Distribution account': 코드, 'Transaction date': datetime.datetime(연도, m, calendar.monthrange(연도, m)[1]),
+                       'Description': f'{연도}년 {m}월 {이름} (전년 연결패키지 IS-당기 월별 합계)', 'Name': None,
+                       'Transaction ID': f'{연도 % 100}-{m:02d}-{이름}', '#': None, 'Balance': None, 'Debit': 차, 'Credit': 대})
+    return (pd.DataFrame(줄) if 줄 else None), 새매핑
+
+
+def KR전년원장(매핑표, 연도):
+    경로 = KR전년자료경로()
+    if not 경로:
+        return None
+    try:
+        쌍 = tuple(sorted((k, (매핑표['bsis'].get(k), 매핑표['kor'].get(k))) for k in 매핑표['kor']))
+        원, 새매핑 = _KR전년원장캐시(경로, os.path.getmtime(경로), 쌍, 연도)
+    except Exception:
+        return None
+    if 원 is None or not len(원):
+        return None
+    for k, (bsis, kor) in 새매핑.items():
+        매핑표['bsis'][k] = bsis
+        매핑표['kor'][k] = kor
+    return _표준화(원, 매핑표, 연도)
+
+
 def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
     """예상 PO (2026-11-20)
     · 당해 : 1~결산월 = 원장 매출 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 = 예상
@@ -7790,7 +7875,8 @@ def 웹자료열기():
     for 파일, 둘곳, 둘이름 in (('CTKonnect.enc', CACHE_PATH, 이름기록),
                                ('씨티케이커넥트.enc', '_작업중/최근업로드_KR.xlsx', '_작업중/최근업로드_KR_파일이름.txt'),
                                ('예상PO.enc', os.path.join(보관폴더, '예상PO.json'), '_작업중/예상PO_이름.txt'),
-                               ('예상PO_KR.enc', os.path.join(보관폴더, '예상PO_KR.json'), '_작업중/예상PO_KR_이름.txt')):
+                               ('예상PO_KR.enc', os.path.join(보관폴더, '예상PO_KR.json'), '_작업중/예상PO_KR_이름.txt'),
+                               ('전년자료_KR.enc', '_작업중/전년자료_KR.xlsx', '_작업중/전년자료_KR_이름.txt')):
         p = os.path.join('_웹자료', 파일)
         if not os.path.exists(p):
             continue
@@ -9689,6 +9775,10 @@ except Exception as e:
     st.stop()
 
 전년연도 = 당해연도 - 1
+if 법인 == '씨티케이커넥트' and len(전년원장) == 0:      # 2026-11-20 : 전년 연결패키지(IS-당기 월별)로 전년 원장을 만듦
+    _kr25 = KR전년원장(매핑표, 당해연도 - 1)
+    if _kr25 is not None and len(_kr25):
+        전년원장 = _kr25
 전년없음 = len(전년원장) == 0      # 2026-11-02 : 전년 원장이 없으면 전년 칸 · 연도 고르기를 숨김 (26년은 25년 없이, 27년부터 전년 비교)
 P = 손익표(당해원장, '활동')          # 대시보드·월간실적은 활동분류 기준을 씁니다
 P전 = 손익표(전년원장, '활동')
@@ -10051,7 +10141,22 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             return 줄
 
         # 값 꺼내기 : 칸 → (당월, 전월, 전년동월, 당해누적, 전년누적)
+        _판세부 = [n for n in _아래('판매관리비') if n not in ('기타', 'SR&ED 차감')]
+        _전판 = (전년원장[전년원장['분류'].eq('판관비')] if len(전년원장) else None)
+
+        def _전년판(n, 끝, 처음=1):
+            if _전판 is None or not len(_전판):
+                return 0.0
+            x = _전판[_전판['월'].between(처음, 끝)]
+            if n == '기타':
+                x = x[~x['계정과목'].astype(str).isin(_판세부)]
+            else:
+                x = x[x['계정과목'].astype(str).eq(n)]
+            return float(-x['금액'].sum())
+
         def 값(n):
+            if 수.get(n, 0) == 1 and (n in _판세부 or n == '기타') and n in Q.index and not 전년없음:
+                return (_월(Q, n, 월), _월(Q, n, 전월), _전년판(n, 월, 월), _누(Q, n), _전년판(n, 월))
             return (_월(Q, n, 월), _월(Q, n, 전월), _월(Q전, n, 월), _누(Q, n), _누(Q전, n))
 
         def 비율(분자, 분모):
@@ -10143,9 +10248,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             return 금액(d), r
 
         세트 = [('전월대비', [f'{str(당해연도)[2:]}년 {월}월', f'{str(당해연도)[2:]}년 {전월}월' if 전월 else '전월', '증감액', '증감율'])]
-        if not 전년없음:
-            세트.append(('전년 동월대비', [f'{str(전년연도)[2:]}년 {월}월', '증감액', '증감율']))
-            세트.append((f'{당해연도}년 {월}월 (누적)', [str(당해연도), str(전년연도), '증감액', '증감율']))
+        if not 전년없음:      # 전년 동월대비는 표기하지 않음 (2026-11-20)
+            세트.append((f'누적 (1~{월}월)', [str(당해연도), str(전년연도), '증감액', '증감율']))
         else:
             세트.append(('누적', [f'{당해연도}년 1~{월}월']))
         머리1 = (f'<th rowspan="2" colspan="2" class="rg">구 분</th>'
@@ -10157,12 +10261,11 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             e1, r1 = 증(당, 전 if 전월 else None, 종, 율)
             칸 = [숫(당, 종), 숫(전, 종) if 전월 else '', e1, r1]
             if not 전년없음:
-                e2, r2 = 증(당, 전년월, 종, 율)
                 e3, r3 = 증(누, 전누, 종, 율)
-                칸 += [숫(전년월, 종), e2, r2, 숫(누, 종), 숫(전누, 종), e3, r3]
+                칸 += [숫(누, 종), 숫(전누, 종), e3, r3]
             else:
                 칸 += [숫(누, 종)]
-            시작 = [0, 4] + ([7] if not 전년없음 else [])
+            시작 = [0, 4]
             td = ''.join(f'<td class="{"gs" if i in 시작 else ""}">{x}</td>' for i, x in enumerate(칸))
             cls = ('grp' if 묶 else '') + (' b' if 굵 else '')
             몸 += (f'<tr class="{cls.strip()}"><td class="g">{_html.escape(묶)}</td>'
@@ -10236,7 +10339,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap table.rpt tr:first-child td {{ border-top:none; }}
         </style>
         <div class="scrollx"><table class="rpt">
-          <colgroup><col style="width:11%"><col style="width:19%">{f'<col style="width:{70 / n칸:.3f}%">' * n칸}</colgroup>
+          <colgroup><col style="width:{11 if n칸 <= 5 else 9}%"><col style="width:{19 if n칸 <= 5 else 15}%">{f'<col style="width:{(70 if n칸 <= 5 else 76) / n칸:.3f}%">' * n칸}</colgroup>
           <thead><tr>{머리1}</tr><tr>{머리2}</tr></thead>
           <tbody>{몸}</tbody></table></div>
         {_수수료표}
@@ -11112,7 +11215,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="note">모든 금액은 {'' if 통화 == 'KRW' else ('천 단위 ' if 표시나눔 == 1000 else '')}{단위K} 로 표시했습니다{' (천원 미만 반올림 · 월별 매출 추이 그래프만 백만원)' if 통화 == 'KRW' else ''} · 원장에서 직접 계산한 실제 수치입니다{환율문구}</div>
       {경고}
       {kpi}
-      <div class="rptgrid" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; align-items:stretch">
+      <div class="rptgrid" style="display:grid; grid-template-columns:{'minmax(0,1fr) minmax(0,1fr)' if 전년없음 else 'minmax(0,3fr) minmax(0,2fr)'}; gap:14px; align-items:stretch">
        <div class="rptl" style="min-width:0">{_실적표html}</div>
        <div class="rptr" style="display:flex; flex-direction:column; gap:14px; min-width:0">
         <div class="card"><h3>월별 매출 추이 (1월~{보고월}월) <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
