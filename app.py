@@ -6881,13 +6881,16 @@ def _구분세부패널(대상, 값컬럼, 부호, 상위N, 집계, 총액):
             f'<tbody>{아래}</tbody></table></div>')
 
 
-def 예상PO칸(원장, 연도, 결산월, 상위N=5):
+def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
     """예상 PO (2026-11-20)
     · 당해 : 1~결산월 = 원장 매출 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 = 예상
     · 다음 해 : 1~12월 예상 · 오른쪽 : 세부사항 글
     · 보이는 표는 실적현황 표와 같은 모양 — 예상 · 글은 아래 「예상 · 세부사항 고치기」 에서 적음
     입력한 예상 · 글은 _보관자료/예상PO.json 에 바로 저장 (웹은 「3. 웹사이트_업데이트」 때 잠가 함께 올림)"""
-    자리 = os.path.join(보관폴더, '예상PO.json')
+    자리 = os.path.join(보관폴더, '예상PO_KR.json' if 한국 else '예상PO.json')
+    나눔 = 1000.0 if 한국 else 1.0          # 한국 : 천원으로 보고 · 적음 (저장은 원)
+    단위글 = '천원' if 한국 else 'USD'
+    키 = 'kr' if 한국 else 'us'
     try:
         with open(자리, encoding='utf-8') as f:
             저장 = json.load(f)
@@ -6909,31 +6912,31 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
     실 = 매.groupby(['줄', '월'])['v'].sum()
     해들 = [(연도, list(range(1, 결산월 + 1)), list(range(결산월 + 1, 13))), (다음, [], list(range(1, 13)))]
 
-    _바깥 = st.expander(f'**예상 PO** — {연도}년 1~{결산월}월 실적(장부 매출 · 거래처별 상위 {상위N}곳) · {결산월 + 1}월부터 · {다음}년 예상 · 단위 USD  (누르면 접고 펼칩니다)',
+    _바깥 = st.expander(f'**예상 PO** — {연도}년 1~{결산월}월 실적(장부 매출 · 거래처별 상위 {상위N}곳) · {결산월 + 1}월부터 · {다음}년 예상 · 단위 {단위글}  (누르면 접고 펼칩니다)',
                         expanded=True)
     보이는곳 = _바깥.container()
 
     # ── 고치기 (접어 둠) : 예상 숫자 · 세부사항 글
     바뀜 = False
     with _바깥:
-      _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 적으면 바로 저장)', key='po_edit')
+      _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 적으면 바로 저장)', key=f'po_edit_{키}')
       for 해, 실적달, 예상달 in (해들 if _고침 else []):
             칸 = str(해)
             이전 = 저장.get(칸, {})
             이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
             줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
-            df = pd.DataFrame([{'거래처': n, **{f'{m}월': float(이전줄.get(n, {}).get(str(m)) or 0.0) for m in 예상달}}
+            df = pd.DataFrame([{'거래처': n, **{f'{m}월': float(이전줄.get(n, {}).get(str(m)) or 0.0) / 나눔 for m in 예상달}}
                                for n in 줄이름], columns=['거래처'] + [f'{m}월' for m in 예상달])
             설정 = {'거래처': st.column_config.TextColumn('거래처', width='medium')}
             for m in 예상달:
-                설정[f'{m}월'] = st.column_config.NumberColumn(f'{m}월 예상', format='localized', step=1)
+                설정[f'{m}월'] = st.column_config.NumberColumn(f'{m}월 예상' + (' (천원)' if 한국 else ''), format='localized', step=1)
             왼, 오른 = st.columns([3, 1], gap='small')
             with 왼:
                 st.markdown(f'**{해}년 예상** ({예상달[0]}\\~{예상달[-1]}월)')
-                새 = st.data_editor(df, key=f'po_{해}', num_rows='dynamic', hide_index=True, width='stretch', column_config=설정)
+                새 = st.data_editor(df, key=f'po_{키}_{해}', num_rows='dynamic', hide_index=True, width='stretch', column_config=설정)
             with 오른:
                 st.markdown(f'**{해}년 세부사항**')
-                글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{해}', height=160,
+                글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{키}_{해}', height=160,
                                   label_visibility='collapsed', placeholder='예상 근거 · 거래처별 진행 상황 등을 적어 주세요')
             새줄 = []
             for _, r in 새.iterrows():
@@ -6943,7 +6946,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
                 값 = {}
                 for m in 예상달:
                     v = r.get(f'{m}월')
-                    값[str(m)] = None if (v is None or pd.isna(v) or float(v) == 0) else float(v)
+                    값[str(m)] = None if (v is None or pd.isna(v) or float(v) == 0) else float(v) * 나눔
                 if n in 기본줄 or any(v is not None for v in 값.values()):
                     새줄.append({'거래처': n, **값})
             새칸 = {'rows': 새줄, '메모': 글 or ''}
@@ -7016,7 +7019,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5):
             왼, 오른 = st.columns([3, 1], gap='small')
             with 왼:
                 st.html(f'{CARD_CSS}<div class="wrap fillcol" translate="no">{css}<div class="card" style="margin-bottom:10px">'
-                        f'<h3>{해}년 예상 PO <span class="unitbadge">단위 USD</span></h3>'
+                        f'<h3>{해}년 예상 PO <span class="unitbadge">단위 {단위글}</span></h3>'
                         f'<div class="scrollx"><table class="potab"><colgroup><col style="width:15%">'
                         + f'<col style="width:{85 / n칸:.3f}%">' * n칸 + '</colgroup>'
                         f'<thead><tr>{머리1}</tr><tr>{머리2}</tr></thead><tbody>{몸}</tbody></table></div></div></div>')
@@ -7786,7 +7789,8 @@ def 웹자료열기():
         return
     for 파일, 둘곳, 둘이름 in (('CTKonnect.enc', CACHE_PATH, 이름기록),
                                ('씨티케이커넥트.enc', '_작업중/최근업로드_KR.xlsx', '_작업중/최근업로드_KR_파일이름.txt'),
-                               ('예상PO.enc', os.path.join(보관폴더, '예상PO.json'), '_작업중/예상PO_이름.txt')):
+                               ('예상PO.enc', os.path.join(보관폴더, '예상PO.json'), '_작업중/예상PO_이름.txt'),
+                               ('예상PO_KR.enc', os.path.join(보관폴더, '예상PO_KR.json'), '_작업중/예상PO_KR_이름.txt')):
         p = os.path.join('_웹자료', 파일)
         if not os.path.exists(p):
             continue
@@ -10077,7 +10081,24 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             return (float(a.get(월, 0.0)), float(a.get(전월, 0.0)) if 전월 else 0.0, float(b.get(월, 0.0)),
                     float(sum(v for m, v in a.items() if m <= 월)), float(sum(v for m, v in b.items() if m <= 월)))
 
-        for n in _아래('매출액'):
+        _한국매출 = []
+        if 법인 == '씨티케이커넥트':          # 한국 : 더존 매출 계정과목 그대로 (제품매출 · 상품매출 · 용역매출)
+            _m = 당해원장[당해원장['분류'].eq('매출')]
+            _순 = ['제품매출', '상품매출', '용역매출']
+            _한국매출 = sorted(_m['계정과목'].astype(str).unique(), key=lambda g: (_순.index(g) if g in _순 else 9, g))
+
+            def _계정과목값(원장, 과목):
+                if 원장 is None or len(원장) == 0:
+                    return {}
+                x = 원장[원장['분류'].eq('매출') & 원장['계정과목'].astype(str).eq(과목)]
+                return (x['Credit'] - x['Debit']).groupby(x['월']).sum().to_dict()
+            for _g in _한국매출:
+                a, b = _계정과목값(당해원장, _g), _계정과목값(전년원장, _g)
+                _v = (float(a.get(월, 0.0)), float(a.get(전월, 0.0)) if 전월 else 0.0, float(b.get(월, 0.0)),
+                      float(sum(v for m, v in a.items() if m <= 월)), float(sum(v for m, v in b.items() if m <= 월)))
+                if any(abs(x) > 0.5 for x in _v):
+                    줄들.append(('', _g, _v, 'amt', False, True))
+        for n in ([] if _한국매출 else _아래('매출액')):
             if 법인 == 'CTKonnect' and str(n).startswith('용역매출'):
                 _중, _ior, _전체 = _나눈값('51103'), _나눈값('51104'), 값(n)
                 줄들 += [('', '상품수수료매출 (중개)', _중, 'amt', False, True),
@@ -10763,7 +10784,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         자금콜그룹 = (f'<colgroup><col style="width:{자금이름비율:.4f}%">'
                       + f'<col style="width:{자금숫자비율:.4f}%">' * 자금칸수 + '</colgroup>')
         자금표스타일 = 'class="lined cfcomp" style="width:100%; table-layout:fixed;"'
-        자금최소폭 = max(자금표너비, 118 + 88 * 자금칸수)   # 옆으로 밀어 보는 막대가 생기게 (2026-11-04) · 앞 「구분」 칸은 틀고정
+        자금최소폭 = max(자금표너비, 150 + 100 * 자금칸수)   # 옆으로 밀어 보는 막대가 생기게 (2026-11-04) · 앞 「구분」 칸은 틀고정
 
         자금rows = ''
         for 국문, 깊이, 값들, 굵게 in 자금줄:
@@ -10841,7 +10862,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                    + _줄('기타 (임차 · 수수료 · 이자 등)', 고기L, 깊이=1)
                    + _줄('영업 현금 순증감', 순L, True))
             _너비 = 자금이름비율 * 2.05 + 자금숫자비율 * (len(months) + 2)
-            _단위줄 = (f'<div style="width:{_너비:.3f}%; min-width:{자금최소폭 * _너비 / 100:.0f}px; text-align:right; '
+            _단위줄 = (f'<div style="width:min(100%, max({_너비:.3f}%, {자금최소폭 * _너비 / 100:.0f}px)); text-align:right; '
                        f'font-size:12px; font-weight:700; color:{T["ink3"]}; margin:6px 0 4px">단위 {단위K}</div>')
             # 항목별 큰 금액 2곳 + 기타 (거래처 · 주된 계정과목)
             def _이름(n):
@@ -11042,10 +11063,10 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <style>
           .wrap .cfcard {{ container-type:inline-size; }}
           .wrap .cfcard .cfin {{ container-type:inline-size; }}
-          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:clamp(10.5px, 0.74cqw, 15px); padding-left:1px !important; padding-right:clamp(3px, 0.3cqw, 7px) !important;
-              padding-top:clamp(5px, 0.42cqw, 9px) !important; padding-bottom:clamp(5px, 0.42cqw, 9px) !important; letter-spacing:-0.2px; }}
-          .wrap table.cfcomp thead th {{ font-size:clamp(10.5px, 0.7cqw, 14px); }}
-          .wrap table.cfcomp th .fcs {{ font-size:clamp(9.5px, 0.58cqw, 12px); }}
+          .wrap table.cfcomp th, .wrap table.cfcomp td {{ font-size:15.5px; padding-left:2px !important; padding-right:7px !important;
+              padding-top:9px !important; padding-bottom:9px !important; letter-spacing:-0.2px; }}
+          .wrap table.cfcomp thead th {{ font-size:15px; }}
+          .wrap table.cfcomp th .fcs {{ font-size:12px; }}
           .wrap .cfcard .cashline {{ height:clamp(126px, 12cqw, 240px); margin-bottom:clamp(12px, 1cqw, 20px); }}
           .wrap .cfcard .cashline .cval {{ font-size:clamp(10px, 0.7cqw, 14px); }}
           .wrap .cfcard .cashline .cylab, .wrap .cfcard .cashline .ctag {{ font-size:clamp(11px, 0.68cqw, 13.5px); }}
@@ -11668,9 +11689,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
     # 화면 전체 너비 (2026-11-20) : 계약 대비 점검 → 조직운영안 · 기타주요사항
     if 계약html:
         st.html(계약html)
-    if 당해보기 and 법인 == 'CTKonnect':
+    if 당해보기:
         try:
-            예상PO칸(당해원장, 당해연도, 보고월)
+            예상PO칸(당해원장, 당해연도, 보고월, 한국=(법인 == '씨티케이커넥트'))
         except Exception as e:
             st.caption(f'예상 PO 칸을 그리지 못했습니다 — {e}')
     if 효율화html:
