@@ -6818,6 +6818,69 @@ def 한줄설명(행들):
     return ''
 
 
+def _구분세부패널(대상, 값컬럼, 부호, 상위N, 집계, 총액):
+    """매출구분(대분류) → 거래처(소분류). 위 표(금액 · 비중)와 아래 표(달별 · 누적)가 같은 줄 · 같은 칸 너비입니다."""
+    _g = 대상.assign(_n=대상['Name'].fillna('(거래처 미기재)'),
+                     _m=pd.to_numeric(대상['월'], errors='coerce') if '월' in 대상.columns else 0)
+    월들 = sorted({int(m) for m in _g['_m'].dropna()}) if '월' in 대상.columns else []
+    _구합 = (_g.groupby('_구분')[값컬럼].sum() * 부호)
+    _구합 = _구합[_구합.abs() > 0.5].sort_values(ascending=False)
+    _고정 = ['상품매출', '제품매출', '상품수수료매출 (중개)', 'IOR매출', '용역매출']
+    _구합 = _구합.reindex([g for g in _고정 if g in _구합.index] + [g for g in _구합.index if g not in _고정])
+
+    def _달(x):
+        v = (x.groupby('_m')[값컬럼].sum() * 부호)
+        return [float(v.get(m, 0.0)) for m in 월들]
+
+    행 = []          # (이름, 종류, 달별, 합)
+    for _구, _v in _구합.items():
+        gg = _g[_g['_구분'].eq(_구)]
+        행.append((str(_구), 'grp', _달(gg), float(_v)))
+        _거 = (gg.groupby('_n')[값컬럼].sum() * 부호)
+        _거 = _거[_거.abs() > 0.5].sort_values(ascending=False)
+        for _n, _w in _거.iloc[:상위N].items():
+            행.append((str(_n), 'sub', _달(gg[gg['_n'].eq(_n)]), float(_w)))
+        if len(_거) > 상위N:
+            _나 = gg[gg['_n'].isin(_거.index[상위N:])]
+            행.append((f'기타 ({len(_거) - 상위N}곳)', 'sub', _달(_나), float(_거.iloc[상위N:].sum())))
+    행.append(('합계', 'tot', _달(_g), float(집계.sum())))
+
+    칸 = lambda v: 금액(v) if abs(v) > 0.5 else '<span class="muted">-</span>'
+    _줄틀 = {'grp': 'font-weight:700', 'sub': '', 'tot': 'font-weight:700'}
+
+    def _이름칸(이름, 종류):
+        들 = 'padding-left:16px;' if 종류 == 'sub' else 'font-weight:700;'
+        return f'<td class="lft notranslate dstk" translate="no" style="{들}">{_html.escape(이름)}</td>'
+
+    위 = ''.join(f'<tr class="{"dg" if k == "grp" else ""}" style="{_줄틀[k]}">{_이름칸(n, k)}<td>{금액(t)}</td>'
+                 f'<td{"" if k != "sub" else " class=" + chr(34) + "muted" + chr(34)}>{t / 총액 * 100:,.1f}%</td></tr>'
+                 for n, k, _d, t in 행)
+    # 아래 표 칸 너비 : 위 표와 같은 47% 이름 칸 + 나머지는 위 표 금액 칸(32%) · 비중 칸(21%) 너비를 이어 붙임
+    k = len(월들) + 1
+    if k <= 2:
+        넓이, 열 = 100.0, [47.0, 32.0, 21.0][:k + 1]
+    else:
+        넓이 = 47.0 + 26.0 * k
+        열 = [47.0] + [26.0] * k
+    열틀 = ''.join(f'<col style="width:{w / 넓이 * 100:.3f}%">' for w in 열)
+    아래 = ''.join(f'<tr class="{"dg" if k2 == "grp" else ""}" style="{_줄틀[k2]}">{_이름칸(n, k2)}' + ''.join(f'<td>{칸(v)}</td>' for v in d)
+                   + f'<td style="font-weight:700">{금액(t)}</td></tr>' for n, k2, d, t in 행)
+    머리 = ''.join(f'<th>{m}월</th>' for m in 월들)
+    return (f'<style>.wrap table.detail td.dstk {{ position:sticky; left:0; z-index:2; background:{T["panel"]}; }}'
+            f'.wrap table.detail tr.dg td {{ background:{T["navysoft"]} !important; }}'
+            f'.wrap table.detail th.dstk {{ position:sticky; left:0; z-index:3; }}</style>'
+            f'<div class="scrollx"><table class="detail">'
+            f'<colgroup><col style="width:47%"><col style="width:32%"><col style="width:21%"></colgroup>'
+            f'<thead><tr><th class="lft">거래처</th><th>누적 금액</th>'
+            f'<th>비중</th></tr></thead><tbody>{위}</tbody></table></div>'
+            f'<div class="sub" style="margin:14px 0 6px">거래 내용 '
+            f'<span class="calc">(달마다 얼마인지{" · 옆으로 밀어 보세요" if k > 2 else ""})</span></div>'
+            f'<div class="scrollx"><table class="detail" style="width:{넓이:.1f}%; min-width:{넓이:.1f}%">'
+            f'<colgroup>{열틀}</colgroup>'
+            f'<thead><tr><th class="lft dstk">거래처</th>{머리}<th>누적</th></tr></thead>'
+            f'<tbody>{아래}</tbody></table></div>')
+
+
 def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
     """항목 하나를 골랐을 때 거래처별 누적 내역을 보여주는 카드 내용(표 + 거래 내용)을 만듭니다.
     매출이든 비용이든 금액이 큰 상위 N곳만 적고 나머지는 「기타」로 한 줄에 모읍니다.
@@ -6834,6 +6897,8 @@ def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
     앞 = 집계.iloc[:상위N]
     기타합 = float(집계.iloc[상위N:].sum())
     총액 = float(집계.sum()) or 1.0
+    if '_구분' in 대상.columns and 대상['_구분'].nunique() > 1:
+        return _구분세부패널(대상, 값컬럼, 부호, 상위N, 집계, 총액)
     줄 = ''
     for 이름2, v in 앞.items():
         줄 += (f'<tr><td class="lft notranslate" translate="no">{이름2}</td>'
@@ -6845,9 +6910,11 @@ def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
         _g = 대상.assign(_n=대상['Name'].fillna('(거래처 미기재)'))
         _구합 = (_g.groupby('_구분')[값컬럼].sum() * 부호)
         _구합 = _구합[_구합.abs() > 0.5].sort_values(ascending=False)
+        _고정 = ['상품매출', '제품매출', '상품수수료매출 (중개)', 'IOR매출', '용역매출']     # 대분류 순서는 고정, 그 밖은 금액순
+        _구합 = _구합.reindex([g for g in _고정 if g in _구합.index] + [g for g in _구합.index if g not in _고정])
         줄 = ''
         for _구, _v in _구합.items():
-            줄 += (f'<tr style="font-weight:700; background:rgba(127,127,127,.06)"><td class="lft">{_html.escape(str(_구))}</td>'
+            줄 += (f'<tr style="font-weight:700; background:rgba(127,127,127,.06)"><td class="lft" style="font-weight:700">{_html.escape(str(_구))}</td>'
                    f'<td>{금액(float(_v))}</td><td>{float(_v) / 총액 * 100:,.1f}%</td></tr>')
             _거 = (_g[_g['_구분'].eq(_구)].groupby('_n')[값컬럼].sum() * 부호)
             _거 = _거[_거.abs() > 0.5].sort_values(ascending=False)
@@ -9847,7 +9914,28 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         _ebitda = 'EBITDA 이익(손실)' if 'EBITDA 이익(손실)' in Q.index else '영업이익(손실)'
         # (묶음, 항목, 값들, 종류, 굵게, 증감율)
         줄들 = [('매출액', '', 값('매출액'), 'amt', True, True)]
-        줄들 += [('', n, 값(n), 'amt', False, True) for n in _아래('매출액')]
+
+        def _계정값(원장, 앞):          # 매출 계정 코드(51103 · 51104)별 월 금액 (대변 − 차변)
+            if 원장 is None or len(원장) == 0:
+                return {}
+            x = 원장[원장['분류'].eq('매출') & 원장['계정영문'].astype(str).str.startswith(앞)]
+            return (x['Credit'] - x['Debit']).groupby(x['월']).sum().to_dict()
+
+        def _나눈값(앞):
+            a, b = _계정값(당해원장, 앞), _계정값(전년원장, 앞)
+            return (float(a.get(월, 0.0)), float(a.get(전월, 0.0)) if 전월 else 0.0, float(b.get(월, 0.0)),
+                    float(sum(v for m, v in a.items() if m <= 월)), float(sum(v for m, v in b.items() if m <= 월)))
+
+        for n in _아래('매출액'):
+            if 법인 == 'CTKonnect' and str(n).startswith('용역매출'):
+                _중, _ior, _전체 = _나눈값('51103'), _나눈값('51104'), 값(n)
+                줄들 += [('', '상품수수료매출 (중개)', _중, 'amt', False, True),
+                         ('', 'IOR매출', _ior, 'amt', False, True)]
+                _남 = tuple(t - x - y for t, x, y in zip(_전체, _중, _ior))
+                if any(abs(v) > 0.5 for v in _남):
+                    줄들.append(('', '기타 용역매출', _남, 'amt', False, True))
+            else:
+                줄들.append(('', n, 값(n), 'amt', False, True))
         줄들 += [('매출원가', '', 값('매출원가'), 'amt', True, False),
                  ('', '원가율(%)', 비율('매출원가', '매출액'), 'pct', False, True),
                  ('매출총이익', '', 값('매출총이익'), 'amt', True, False),
@@ -9908,33 +9996,44 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             몸 += (f'<tr class="{cls.strip()}"><td class="g">{_html.escape(묶)}</td>'
                    f'<td class="it">{_html.escape(항)}</td>{td}</tr>')
         n칸 = sum(len(c) for _, c in 세트)
+        _머리 = '#3A3A3A' if 밝게 else '#2A2F3A'
+        _회색 = '#E8E8E8' if 밝게 else 'rgba(255,255,255,0.07)'
+        _진선 = '#222222' if 밝게 else T['ink3']
+        _점선 = '#C8C8C8' if 밝게 else 'rgba(255,255,255,0.18)'
+        _점선진 = '#8A8A8A' if 밝게 else 'rgba(255,255,255,0.35)'
         return f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card" style="margin-bottom:14px"><h3>{당해연도}년 {월}월 실적현황 <span class="unitbadge">단위 {'천원' if 통화 == 'KRW' else 'USD'}, %</span></h3>
         <style>
-          .wrap table.rpt {{ border-collapse:collapse; table-layout:fixed; margin-top:8px; width:auto !important; }}
-          .wrap table.rpt th {{ font-size:13px; padding:5px 4px !important; text-align:center; border-bottom:1px solid {T['navyline']}; }}
-          .wrap table.rpt td {{ font-size:13px; padding:4px 6px !important; text-align:right; white-space:nowrap;
-                                border-bottom:1px solid {T['line']}; color:{T['ink']}; }}
-          .wrap table.rpt td.g {{ text-align:left; font-weight:800; background:{T['navysoft']}; }}
-          .wrap table.rpt td.it {{ text-align:left; background:{T['navysoft']}; color:{T['ink2']}; padding-left:8px !important; }}
+          /* 월간 실적보고 엑셀 양식 모양 : 짙은 회색 머리 · 회색 구분 칸 · 세로 점선 · 가로는 묶음 위 실선만 */
+          .wrap table.rpt {{ border-collapse:collapse; table-layout:fixed; margin-top:8px; width:auto !important;
+                             border-top:1.5px solid {_진선}; border-bottom:1.5px solid {_진선}; border-radius:0 !important; }}
+          .wrap table.rpt th {{ font-size:13.5px; font-weight:800; padding:5px 4px !important; text-align:center;
+                                background:{_머리} !important; color:#FFFFFF; border-radius:0 !important;
+                                border:none; border-left:1px dotted rgba(255,255,255,0.45); }}
+          .wrap table.rpt thead tr:first-child th {{ border-bottom:1px dotted rgba(255,255,255,0.45); }}
+          .wrap table.rpt th.rg {{ border-left:none; border-bottom:none !important; }}
+          .wrap table.rpt td {{ font-size:13.5px; padding:4px 6px !important; text-align:right; white-space:nowrap;
+                                border:none; border-left:1px dotted {_점선}; color:{T['ink']}; background:transparent !important; }}
+          .wrap table.rpt td.g {{ text-align:left; font-weight:800; background:{_회색} !important; border-left:none; }}
+          .wrap table.rpt td.it {{ text-align:left; background:{_회색} !important; color:{T['ink']}; padding-left:10px !important; border-left:none; }}
+          .wrap table.rpt td.gs {{ border-left:1px dotted {_점선진}; }}
           .wrap table.rpt tr.b td {{ font-weight:800; }}
-          .wrap table.rpt tr.grp td {{ border-top:1px solid {T['strongline']}; }}
-          .wrap table.rpt .gs {{ border-left:1px solid {T['navyline']}; }}
-          .wrap table.rpt td.gs {{ border-left:1px solid {T['line']}; }}
+          .wrap table.rpt tr.grp td {{ border-top:1.5px solid {_진선}; }}
+          .wrap table.rpt tr:first-child td {{ border-top:none; }}
         </style>
         <div class="scrollx"><table class="rpt">
           <colgroup><col style="width:92px"><col style="width:150px">{'<col style="width:96px">' * n칸}</colgroup>
           <thead><tr>{머리1}</tr><tr>{머리2}</tr></thead>
           <tbody>{몸}</tbody></table></div>
-        <div class="sub" style="margin-top:6px;font-size:12px">(**) 변동비 = 매출원가 (그 외 판매관리비는 고정비로 분류) ·
+        <div class="sub" style="margin-top:6px;font-size:12px;width:0;min-width:100%">(**) 변동비 = 매출원가 (그 외 판매관리비는 고정비로 분류) ·
           공헌이익율 = (매출액 − 매출원가) ÷ 매출액 · BEP = 판매관리비 ÷ 공헌이익율 · EBITDA = 영업이익 + 감가상각비 · 무형자산상각비
           · 손익계산서 계정 기준{' · 전년 자료가 없어 전년 칸은 뺐습니다' if 전년없음 else ''}</div>
       </div></div>"""
 
     try:
-        st.html(_실적현황표())
+        _실적표html = _실적현황표()
     except Exception as e:
-        st.caption(f'실적현황 표를 그리지 못했습니다 — {e}')
+        _실적표html = f'<div class="sub">실적현황 표를 그리지 못했습니다 — {_html.escape(str(e))}</div>'
 
     이전월 = 보고월 - 1 if 보고월 > 1 else None
     # ★KPI 카드는 1~보고월 누적★ (아래 표·그래프와 같은 기준)
@@ -10806,7 +10905,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="note">모든 금액은 {'' if 통화 == 'KRW' else ('천 단위 ' if 표시나눔 == 1000 else '')}{단위K} 로 표시했습니다{' (천원 미만 반올림 · 월별 매출 추이 그래프만 백만원)' if 통화 == 'KRW' else ''} · 원장에서 직접 계산한 실제 수치입니다{환율문구}</div>
       {경고}
       {kpi}
-      <div style="display:grid; grid-template-columns:1.5fr 1fr; gap:14px;">
+      <div class="rptgrid" style="display:grid; grid-template-columns:auto minmax(0,1fr); gap:14px; align-items:start">
+       <div>{_실적표html}</div>
+       <div style="display:flex; flex-direction:column; gap:14px; min-width:0">
         <div class="card"><h3>월별 매출 추이 <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
           <div class="sub">{(f'1~{보고월}월 · 맨 오른쪽 <b>1~{보고월}월 누적</b> {CK(누적26)} <span class="muted">(누적 막대 높이는 월별과 다른 기준)</span>') if 전년없음 else
             (f'1~{보고월}월 · {전년연도}년 동월 비교 &nbsp;|&nbsp; 맨 오른쪽 <b>1~{보고월}월 누적</b> = {전년연도}년 {CK(누적25)} ↔ {당해연도}년 {CK(누적26)}'
@@ -10816,7 +10917,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           <span><span class="sw" style="background:{T['accent']};"></span> {당해연도}년</span></div></div>
         <div class="card"><h3>매출액 구성 <span class="unitbadge">단위 {단위K}</span></h3>
           <div class="sub">1~{보고월}월 누적 · 손익 계정과목 기준</div>{mix_html}</div>
+       </div>
       </div>
+      <style>@media (max-width:1100px) {{ .wrap .rptgrid {{ grid-template-columns:1fr !important; }} }}</style>
     </div>"""
     st.html(상단html)
 
@@ -10847,7 +10950,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             손익골라본 = st.selectbox('계정과목', 드릴목록_손익, key='dash_pl_drill',
                                      help='고른 항목의 금액을 거래처별로 보여줍니다')
         with _골2:
-            손익기간 = st.radio('기간', ['당월', '누적'], index=0, horizontal=True, key='dash_pl_drill_period',
+            손익기간 = st.radio('기간', ['당월', '누적'], index=1, horizontal=True, key='dash_pl_drill_period',
                                 help=f'당월 = {보고월X}월만 · 누적 = 1~{보고월X}월')
     손익조건, 손익부호 = 항목조건_손익(손익골라본)
     _당월만 = 손익기간 == '당월'
