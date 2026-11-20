@@ -10876,17 +10876,12 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         def ㅈ(키):
             v = [float(자금표.loc[키, m]) for m in months]
             앞 = [float(np.nansum(v))]           # 「실적 누적」(1~보고월) — 맨 앞 칸
-            return 앞 + v + [묶음(키, m) for m in 자금예상월]
+            return 앞 + v + [None for m in 자금예상월]      # 예상은 지움 — 남은 달은 빈칸 (2026-11-20)
 
-        # 예상 달의 기말은 마지막 실적 잔액에서 이어 붙입니다
-        예상기초, 예상기말, 앞잔액 = [], [], (기말[-1] if 기말 else 기초현금)
-        for m in 자금예상월:
-            예상기초.append(앞잔액)
-            앞잔액 = 앞잔액 + 묶음('순증감', m)
-            예상기말.append(앞잔액)
+        예상기초, 예상기말 = [], []          # 예상 잔액도 그리지 않음 (2026-11-20)
 
         자금줄 = [
-            ('기초 현금', 0, [기초[0]] + 기초 + 예상기초, True),
+            ('기초 현금', 0, [기초[0]] + 기초 + [None] * len(자금예상월), True),
             ('영업활동', 0, ㅈ('영업'), True),
             ('매출채권 회수', 1, ㅈ('AR'), False),
             ('기타입금', 1, ㅈ('ETCIN'), False),
@@ -10902,7 +10897,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             ('리스료 지급', 1, ㅈ('리스'), False),
             ('환율변동 효과', 0, ㅈ('FX'), False),
             ('순증감', 0, ㅈ('순증감'), True),
-            ('기말 현금', 0, [기말[-1]] + 기말 + 예상기말, True),      # 실적 누적 칸 = 실제 {보고월}월 말 잔액
+            ('기말 현금', 0, [기말[-1]] + 기말 + [None] * len(자금예상월), True),      # 실적 누적 칸 = 실제 {보고월}월 말 잔액
         ]
         # 칸을 좁혀 한 화면에 — 구분 · 실적 누적 · 실적 달 · 예상 달 (2026-11-03)
         자금칸수 = 1 + len(months) + len(자금예상월)
@@ -10913,16 +10908,15 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         자금콜그룹 = (f'<colgroup><col style="width:{자금이름비율:.4f}%">'
                       + f'<col style="width:{자금숫자비율:.4f}%">' * 자금칸수 + '</colgroup>')
         자금표스타일 = 'class="lined cfcomp" style="width:100%; table-layout:fixed;"'
-        자금최소폭 = max(자금표너비, 150 + 100 * 자금칸수)   # 옆으로 밀어 보는 막대가 생기게 (2026-11-04) · 앞 「구분」 칸은 틀고정
+        자금최소폭 = max(자금표너비, 140 + 86 * 자금칸수)   # 옆으로 밀어 보는 막대가 생기게 (2026-11-04) · 앞 「구분」 칸은 틀고정
 
         자금rows = ''
         for 국문, 깊이, 값들, 굵게 in 자금줄:
             cls = ' class="total"' if 굵게 else (' class="sub sub2"' if 깊이 == 2
                                                  else (' class="sub"' if 깊이 else ''))
-            예상칸 = ' class="fc"'
             칸 = ''.join(
-                '<td' + (' class="cum"' if i == 0 else (예상칸 if i > len(months) else ''))
-                + '>' + ('-' if abs(v * 배율 / 표시나눔) < 0.5 else CK(v)) + '</td>'
+                '<td' + (' class="cum"' if i == 0 else '')
+                + '>' + ('' if v is None else ('-' if abs(v * 배율 / 표시나눔) < 0.5 else CK(v))) + '</td>'
                 for i, v in enumerate(값들))
             자금rows += f'<tr{cls}><td class="name">{국문}</td>{칸}</tr>'
 
@@ -10981,6 +10975,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 칸 = ''.join('<td' + (' class="cum"' if i == 0 else '') + '>'
                              + ('-' if abs(v * 배율 / 표시나눔) < 0.5 else CK(v)) + '</td>'
                              for i, v in enumerate([sum(값들)] + 값들 + [sum(값들) / max(len(months), 1)]))
+                이름 = re.sub(r'\s*\(([^)]*)\)', lambda m_: f' <span style="font-size:12.5px;font-weight:400;color:{T["ink3"]}">({m_.group(1)})</span>', 이름)
                 return f'<tr{cls}><td class="name">{이름}</td>{칸}</tr>'
             _행 = (_줄('입금 (채권 · 기타)', 입금L, True)
                    + _줄('변동비', 변동L, True)
@@ -10990,7 +10985,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                    + _줄('급여 · 인건비', 고급L, 깊이=1)
                    + _줄('기타 (임차 · 수수료 · 이자 등)', 고기L, 깊이=1)
                    + _줄('영업 현금 순증감', 순L, True))
-            _너비 = 자금이름비율 * 2.05 + 자금숫자비율 * (len(months) + 2)
+            _너비 = 자금이름비율 * 1.6 + 자금숫자비율 * (len(months) + 2)
             _단위줄 = (f'<div style="width:min(100%, max({_너비:.3f}%, {자금최소폭 * _너비 / 100:.0f}px)); text-align:right; '
                        f'font-size:12px; font-weight:700; color:{T["ink3"]}; margin:6px 0 4px">단위 {단위K}</div>')
             # 항목별 큰 금액 2곳 + 기타 (거래처 · 주된 계정과목)
@@ -11021,7 +11016,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 if len(_나) and abs(float(_나['영향'].sum())) >= 0.5:
                     _큰행 += _줄(f'기타 {_나["거래처2"].nunique()}곳',
                                  [float(_나[_나['월'].eq(m)]['영향'].sum()) for m in months], 깊이=1)
-            _콜 = (f'<colgroup><col style="width:{자금이름비율 * 2.05 / _너비 * 100:.4f}%">'
+            _콜 = (f'<colgroup><col style="width:{자금이름비율 * 1.6 / _너비 * 100:.4f}%">'
                    + f'<col style="width:{자금숫자비율 / _너비 * 100:.4f}%">' * (len(months) + 2) + '</colgroup>')
             고변html = (
                 f'<h3 style="margin-top:18px">주요 자금 집행 내역 (입금 / 변동비 / 고정비)</h3>'
@@ -11141,14 +11136,14 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                   f'{눈금}{축}{구간}{표시}</div>')
 
         예상글 = (f'{달표(자금예상월[0])} ~ {달표(자금예상월[-1])}' if 자금예상월 else '')
-        예상안내 = (f' · <b>{예상글} (예상)</b> 은 앞으로 올 달입니다' if 자금예상월 else '')
+        예상안내 = ''
         예상설명 = ('' if not 예상월들 else
                     f'<br><b>{예상월들[0]}~{예상월들[-1]}월(예상)</b> 은 실적이 아니라 '
                     f'<b>추정치</b>입니다 — 아래 붉은 칸의 가정 셋으로 계산했습니다.')
 
         # ── 예상 칸이 어떤 가정에서 나왔는지 (실적이 아니라 가정임을 붉게 적습니다)
         가정html = ''
-        if 자금예상월:
+        if False and 자금예상월:          # 예상을 지워 가정 설명도 뺌 (2026-11-20)
             담당자넣음 = sorted({이름 for 이름, 칸 in 담당자칸.items()
                                  if any(m > 보고월 and v for m, v in 칸.items())})
             바뀐것 = []
@@ -11214,6 +11209,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           .wrap .cfsum {{ font-size:13px; color:{T['ink2']}; margin:4px 0 8px; }}
           .wrap table.cfsplit td.name {{ white-space:normal; }}
           .wrap table.cfcomp td:last-child {{ font-weight:400; color:{T['ink2']}; }}
+          .wrap table.cfcomp:not(.cfsplit) th:last-child {{ background:{T['navy']}; }}
+          .wrap table.cfcomp:not(.cfsplit) td:last-child {{ background:transparent; color:{T['ink']}; }}
+          .wrap table.cfcomp:not(.cfsplit) tr.total td:last-child {{ background:{T['zebra']}; }}
           .wrap table.cfcomp tr.total td:last-child {{ font-weight:800; color:{T['ink']}; filter:none; }}
         </style>
         {꺾은선머리}
@@ -11222,7 +11220,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <table {자금표스타일}>{자금콜그룹}<thead><tr><th>구분</th>
         <th class="cum">실적 누적<br><span class="fcs">1~{보고월}월</span></th>
         {''.join(f'<th>{m}월</th>' for m in months)}
-        {''.join(f'<th class="fc">{달이름(m)}<br><span class="fcs">{"예상" if m <= 12 else f"{(당해연도 + 1) % 100}년 예상"}</span></th>' for m in 자금예상월)}
+        {''.join(f'<th>{달이름(m)}</th>' for m in 자금예상월)}
         </tr></thead>
         <tbody>{자금rows}</tbody></table></div></div>
         <div class="cfin">{가정html}
