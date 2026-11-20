@@ -6968,87 +6968,250 @@ def KR전년원장(매핑표, 연도):
     return _표준화(원, 매핑표, 연도)
 
 
-def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
-    """예상 PO (2026-11-20)
-    · 당해 : 1~결산월 = 원장 매출 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 = 예상
-    · 다음 해 : 1~12월 예상 · 오른쪽 : 세부사항 글
-    · 보이는 표는 실적현황 표와 같은 모양 — 예상 · 글은 아래 「예상 · 세부사항 고치기」 에서 적음
-    입력한 예상 · 글은 _보관자료/예상PO.json 에 바로 저장 (웹은 「3. 웹사이트_업데이트」 때 잠가 함께 올림)"""
-    자리 = os.path.join(보관폴더, '예상PO_KR.json' if 한국 else '예상PO.json')
-    나눔 = 1000.0 if 한국 else 1.0          # 한국 : 천원으로 보고 · 적음 (저장은 원)
-    단위글 = '천원' if 한국 else 'USD'
-    키 = 'kr' if 한국 else 'us'
+def _PO원격설정():
+    """예상 PO 를 웹 · PC 가 함께 쓰는 비공개 저장소 설정 — 셋 중 하나라도 없으면 None (그때는 이 컴퓨터 파일에만 저장)"""
+    토큰, 저장소, 열쇠 = _보관설정('github_token'), _보관설정('github_repo'), _보관설정('data_key')
+    return (토큰, 저장소, 열쇠) if (토큰 and 저장소 and 열쇠) else None
+
+
+def _PO원격(방법, 길, 몸=None):
+    import urllib.request as _UR
+    import urllib.parse as _UP
+    토큰, 저장소, _ = _PO원격설정()
+    H = {'Authorization': 'Bearer ' + 토큰, 'Accept': 'application/vnd.github+json',
+         'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'ctk-dashboard'}
+    자료 = None
+    if 몸 is not None:
+        자료 = json.dumps(몸).encode('utf-8')
+        H['Content-Type'] = 'application/json'
+    요청 = _UR.Request('https://api.github.com/repos/%s/contents/%s' % (저장소, _UP.quote(길)),
+                       data=자료, headers=H, method=방법)
+    with _UR.urlopen(요청, timeout=60) as 답:
+        return json.loads(답.read().decode('utf-8') or 'null')
+
+
+def _PO자리(한국):
+    return (os.path.join(보관폴더, '예상PO_KR.json' if 한국 else '예상PO.json'),
+            'po/po_kr.enc' if 한국 else 'po/po_us.enc')
+
+
+def _PO모양(저장):
+    """옛 모양 {'2026': …, '2027': …} → 새 모양 {'판': {'2026-10': {…}}, '요약': {…}} (옛 내용은 맨 첫 판으로)"""
+    if not isinstance(저장, dict):
+        return {'판': {}, '요약': {}}
+    if '판' in 저장:
+        저장.setdefault('요약', {})
+        return 저장
+    옛 = {k: v for k, v in 저장.items() if re.fullmatch(r'\d{4}', str(k))}
+    return {'판': ({'옛자료': 옛} if 옛 else {}), '요약': {}}
+
+
+def _PO읽기(한국, 새로=False):
+    """→ (저장, sha, 어디서, 문제)  · 원격 설정이 있으면 저장소에서(15초마다 새로), 없으면 이 컴퓨터 파일에서"""
+    import base64
+    import time as _t
+    로컬, 원격길 = _PO자리(한국)
+    설정 = _PO원격설정()
+    캐 = st.session_state.get('_po_cache_' + 원격길)
+    if 설정 and not 새로 and 캐 and _t.time() - 캐[0] < 15:
+        return json.loads(json.dumps(캐[1])), 캐[2], '원격', ''
+    if 설정:
+        try:
+            r = _PO원격('GET', 원격길)
+            바이트, _ = 열기(base64.b64decode(r['content']), 설정[2])
+            저장 = _PO모양(json.loads(바이트.decode('utf-8')))
+            st.session_state['_po_cache_' + 원격길] = (_t.time(), 저장, r['sha'])
+            return json.loads(json.dumps(저장)), r['sha'], '원격', ''
+        except Exception as e:
+            if getattr(e, 'code', None) == 404:            # 저장소에 아직 없음 → 이 컴퓨터 파일로 시작
+                문제 = ''
+            else:
+                return None, None, '원격', f'공용 저장소를 읽지 못했습니다 — {e}'
+    else:
+        문제 = ''
     try:
-        with open(자리, encoding='utf-8') as f:
+        with open(로컬, encoding='utf-8') as f:
             저장 = json.load(f)
     except Exception:
         저장 = {}
-    다음 = 연도 + 1
-    매 = 원장[원장['분류'].eq('매출') & 원장['월'].le(결산월)].copy()
+    return _PO모양(저장), None, ('원격' if 설정 else '로컬'), 문제
+
+
+def _PO쓰기(한국, 저장, sha, 메모):
+    """저장소(있으면) + 이 컴퓨터 파일에 씁니다 → 새 sha"""
+    import base64
+    로컬, 원격길 = _PO자리(한국)
+    설정 = _PO원격설정()
+    새sha = None
+    if 설정:
+        덩이 = 잠그기(json.dumps(저장, ensure_ascii=False).encode('utf-8'), 'po.json', 설정[2])
+        몸 = {'message': 메모, 'content': base64.b64encode(덩이).decode('ascii')}
+        if sha:
+            몸['sha'] = sha
+        새sha = _PO원격('PUT', 원격길, 몸)['content']['sha']
+        st.session_state.pop('_po_cache_' + 원격길, None)
+    try:
+        os.makedirs(보관폴더, exist_ok=True)
+        with open(로컬, 'w', encoding='utf-8') as f:
+            json.dump(저장, f, ensure_ascii=False, indent=1)
+    except OSError:
+        if not 설정:
+            raise
+    return 새sha
+
+
+def _PO지금():
+    from datetime import datetime as _dt
+    try:
+        from zoneinfo import ZoneInfo
+        return _dt.now(ZoneInfo('Asia/Seoul')).strftime('%Y-%m-%d %H:%M')
+    except Exception:
+        return _dt.now().strftime('%Y-%m-%d %H:%M')
+
+
+def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
+    """예상 PO (2026-11-20 · 보고월별 판 · 잠금 · 요약)
+    · 보고월(결산월)마다 「판」 하나 : 당해 1~결산월 실적(거래처별 상위 5곳 + 기타) · 그 뒤 달 예상 · 다음 해 1~12월 예상 · 세부사항 글
+    · 누구나 지금 보고월 판을 적고 「💾 저장」 → 부장님이 관리 비밀번호(admin_password)로 「🔒 잠그기」 하면 아무도 못 고침
+    · 다음 달 자료가 올라오면 새 판이 열리고(지난 판 예상 숫자를 미리 채움), 지난 판은 「지난 보고 기록」 에서 그대로 봄
+    · 요약 칸은 부장님만 적음
+    · 저장 : Secrets 에 github_token · github_repo · data_key 가 있으면 비공개 저장소에 잠가(암호화) 저장 → 웹 · PC 가 같은 내용을 봄
+             없으면 이 컴퓨터 _보관자료/예상PO(_KR).json 에만"""
+    나눔 = 1000.0 if 한국 else 1.0          # 한국 : 천원으로 보고 · 적음 (저장은 원)
+    단위글 = '천원' if 한국 else 'USD'
+    키 = 'kr' if 한국 else 'us'
+    판키 = f'{연도}-{int(결산월):02d}'
+    저장, sha, 어디서, 문제 = _PO읽기(한국)
+
+    _바깥 = st.expander(f'**예상 PO** — {연도}년 {결산월}월 보고 · 1~{결산월}월 실적(장부 매출 · 거래처별 상위 {상위N}곳) · '
+                        f'{결산월 + 1 if 결산월 < 12 else 1}월부터 예상 · 단위 {단위글}  (누르면 접고 펼칩니다)', expanded=True)
+    if 저장 is None:
+        _바깥.warning('⚠ ' + 문제 + ' — 잠시 뒤 새로고침해 주세요. (그동안 적기 · 잠그기는 막아 둡니다)')
+        return
+    판들 = 저장['판']
+
+    # ── 원장 매출 : 거래처별
+    매 = 원장[원장['분류'].eq('매출')].copy()
     매['v'] = 매['Credit'].fillna(0) - 매['Debit'].fillna(0)
-    매['거'] = 매['Name'].map(lambda n: re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip()
+    매['거'] = 매['Name'].map(lambda n: re.sub(r'(?i)\bCTK\s+onnect\b', 'CTKonnect',
+                                                re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip())
                               if str(n) not in ('nan', 'None', '') else '(거래처 미기재)')
     _대 = {}
     for n in 매['거']:
         _대.setdefault(n.upper(), n)
     매['거'] = 매['거'].map(lambda n: _대[n.upper()])
-    누 = 매.groupby('거')['v'].sum().sort_values(ascending=False)
-    위 = [n for n in 누.index[:상위N]]
-    기본줄 = 위 + (['기타'] if len(누) > 상위N else [])
-    매['줄'] = 매['거'].where(매['거'].isin(위), '기타')
-    실 = 매.groupby(['줄', '월'])['v'].sum()
-    해들 = [(연도, list(range(1, 결산월 + 1)), list(range(결산월 + 1, 13))), (다음, [], list(range(1, 13)))]
 
-    _바깥 = st.expander(f'**예상 PO** — {연도}년 1~{결산월}월 실적(장부 매출 · 거래처별 상위 {상위N}곳) · {결산월 + 1}월부터 · {다음}년 예상 · 단위 {단위글}  (누르면 접고 펼칩니다)',
-                        expanded=True)
+    def _틀(해p, 월p):
+        """판 하나의 기본 줄 · 실적 · 달 나눔"""
+        if 해p == 연도:
+            m = 매[매['월'].le(월p)]
+        else:
+            m = 매.iloc[0:0]                    # 다른 해 판 — 실적은 이 원장에 없음 (예상만 보임)
+        누 = m.groupby('거')['v'].sum().sort_values(ascending=False)
+        위 = list(누.index[:상위N])
+        기본 = 위 + (['기타'] if len(누) > 상위N else [])
+        m = m.assign(줄=m['거'].where(m['거'].isin(위), '기타'))
+        실 = m.groupby(['줄', '월'])['v'].sum()
+        실적달 = list(range(1, 월p + 1)) if 해p == 연도 else []
+        해들 = [(해p, 실적달, list(range(월p + 1, 13))), (해p + 1, [], list(range(1, 13)))]
+        return 기본, 실, [h for h in 해들 if h[2]]
+
+    # ── 지금 판 : 없으면 바로 앞 판의 예상 숫자를 미리 채움 (저장 전)
+    앞판들 = sorted([k for k in 판들 if k != 판키 and k != '옛자료' and k < 판키], reverse=True)
+    if 판키 in 판들:
+        판 = 판들[판키]
+        새판 = False
+    else:
+        원본 = 판들.get(앞판들[0]) if 앞판들 else 판들.get('옛자료')
+        판 = {str(h): {'rows': [dict(r) for r in (원본 or {}).get(str(h), {}).get('rows', [])], '메모': ''}
+              for h in (연도, 연도 + 1)}
+        판['잠금'] = False
+        새판 = True
+    잠김 = bool(판.get('잠금'))
+    기본줄, 실, 해들 = _틀(연도, 결산월)
+
+    # ── 관리 비밀번호 (부장님)
+    관리비번 = _보관설정('admin_password')
+    관리자 = bool(관리비번) and st.session_state.get('_po_admin_ok') == 관리비번
+
+    # ── 상태 줄
+    기록 = 판.get('기록', [])
+    마지막 = 기록[-1] if 기록 else None
+    if 잠김:
+        상태 = f'🔒 <b>{결산월}월 보고 잠김</b> — {판.get("잠근시각", "")} · 이제 아무도 고칠 수 없습니다'
+        색 = '#B4441C' if 밝게 else '#F2A07B'
+    elif 새판:
+        상태 = (f'✍ <b>{결산월}월 보고 작성 전</b> — '
+                + (f'지난 보고({int(앞판들[0][5:])}월)의 예상 숫자를 미리 채워 두었습니다 · 고친 뒤 「💾 저장」' if 앞판들 else '아래 「고치기」 에서 적고 「💾 저장」'))
+        색 = T['ink3']
+    else:
+        상태 = (f'✍ <b>{결산월}월 보고 작성 중</b>'
+                + (f' — 마지막 저장 {마지막.get("시각", "")} · {_html.escape(마지막.get("작성자", "") or "이름 없음")}' if 마지막 else ''))
+        색 = T['ink3']
+    with _바깥:
+        st.html(f'<div style="font-size:14px;color:{색};margin:0 0 4px">{상태}</div>')
     보이는곳 = _바깥.container()
 
-    # ── 고치기 (접어 둠) : 예상 숫자 · 세부사항 글
-    바뀜 = False
+    # ── 고치기 : 잠긴 판은 못 켬
     with _바깥:
-      _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 적으면 바로 저장)', key=f'po_edit_{키}')
-      for 해, 실적달, 예상달 in (해들 if _고침 else []):
-            칸 = str(해)
-            이전 = 저장.get(칸, {})
-            이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
-            줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
-            df = pd.DataFrame([{'거래처': n, **{f'{m}월': float(이전줄.get(n, {}).get(str(m)) or 0.0) / 나눔 for m in 예상달}}
-                               for n in 줄이름], columns=['거래처'] + [f'{m}월' for m in 예상달])
-            설정 = {'거래처': st.column_config.TextColumn('거래처', width='medium')}
-            for m in 예상달:
-                설정[f'{m}월'] = st.column_config.NumberColumn(f'{m}월 예상' + (' (천원)' if 한국 else ''), format='localized', step=1)
-            왼, 오른 = st.columns([3, 1], gap='small')
-            with 왼:
-                st.markdown(f'**{해}년 예상** ({예상달[0]}\\~{예상달[-1]}월)')
-                새 = st.data_editor(df, key=f'po_{키}_{해}', num_rows='dynamic', hide_index=True, width='stretch', column_config=설정)
-            with 오른:
-                st.markdown(f'**{해}년 세부사항**')
-                글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{키}_{해}', height=160,
-                                  label_visibility='collapsed', placeholder='예상 근거 · 거래처별 진행 상황 등을 적어 주세요')
-            새줄 = []
-            for _, r in 새.iterrows():
-                n = str(r.get('거래처') or '').strip()
-                if not n or n == 'nan':
-                    continue
-                값 = {}
+        _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 다 적고 「💾 저장」)', key=f'po_edit_{키}',
+                          disabled=잠김, help=('부장님이 잠근 보고는 고칠 수 없습니다' if 잠김 else None))
+        if _고침 and not 잠김:
+            if 어디서 == '로컬' and os.name != 'nt':
+                st.caption('⚠ 공용 저장소 설정(github_token · github_repo)이 없어, 웹에서 저장한 내용은 이 웹 서버에만 잠시 남습니다.')
+            작성자 = st.text_input('작성자', key=f'po_who_{키}', placeholder='이름을 적어 주세요 (저장 기록에 남습니다)')
+            새판값 = {}
+            for 해, 실적달, 예상달 in 해들:
+                칸 = str(해)
+                이전 = 판.get(칸, {})
+                이전줄 = {r.get('거래처', ''): r for r in 이전.get('rows', [])}
+                줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
+                df = pd.DataFrame([{'거래처': n, **{f'{m}월': float(이전줄.get(n, {}).get(str(m)) or 0.0) / 나눔 for m in 예상달}}
+                                   for n in 줄이름], columns=['거래처'] + [f'{m}월' for m in 예상달])
+                설정 = {'거래처': st.column_config.TextColumn('거래처', width='medium')}
                 for m in 예상달:
-                    v = r.get(f'{m}월')
-                    값[str(m)] = None if (v is None or pd.isna(v) or float(v) == 0) else float(v) * 나눔
-                if n in 기본줄 or any(v is not None for v in 값.values()):
-                    새줄.append({'거래처': n, **값})
-            새칸 = {'rows': 새줄, '메모': 글 or ''}
-            if 새칸 != {'rows': 이전.get('rows', []), '메모': 이전.get('메모', '')}:
-                저장[칸] = 새칸
-                바뀜 = True
-      if _고침 and os.name != 'nt':
-            st.caption('웹에서 적은 내용은 이 웹 서버에만 잠시 남습니다 — 오래 남길 내용은 PC 대시보드에서 적고 「3. 웹사이트_업데이트」 를 해 주세요.')
-    if 바뀜:
-        try:
-            os.makedirs(보관폴더, exist_ok=True)
-            with open(자리, 'w', encoding='utf-8') as f:
-                json.dump(저장, f, ensure_ascii=False, indent=1)
-        except OSError as e:
-            st.caption(f'저장하지 못했습니다 — {e}')
+                    설정[f'{m}월'] = st.column_config.NumberColumn(f'{m}월 예상' + (' (천원)' if 한국 else ''), format='localized', step=1)
+                왼, 오른 = st.columns([3, 1], gap='small')
+                with 왼:
+                    st.markdown(f'**{해}년 예상** ({예상달[0]}\\~{예상달[-1]}월)')
+                    새 = st.data_editor(df, key=f'po_{키}_{판키}_{해}', num_rows='dynamic', hide_index=True, width='stretch',
+                                        column_config=설정)
+                with 오른:
+                    st.markdown(f'**{해}년 세부사항**')
+                    if 새판 and 앞판들:
+                        _앞글 = 판들.get(앞판들[0], {}).get(칸, {}).get('메모', '')
+                        if _앞글:
+                            st.caption(f'지난 보고({int(앞판들[0][5:])}월) 세부사항 : ' + _앞글[:300])
+                    글 = st.text_area(f'{해}년 세부사항', value=이전.get('메모', ''), key=f'po_memo_{키}_{판키}_{해}', height=160,
+                                      label_visibility='collapsed', placeholder='예상 근거 · 거래처별 진행 상황 등을 적어 주세요')
+                새줄 = []
+                for _, r in 새.iterrows():
+                    n = str(r.get('거래처') or '').strip()
+                    if not n or n == 'nan':
+                        continue
+                    값 = {}
+                    for m in 예상달:
+                        v = r.get(f'{m}월')
+                        값[str(m)] = None if (v is None or pd.isna(v) or float(v) == 0) else float(v) * 나눔
+                    if n in 기본줄 or any(v is not None for v in 값.values()):
+                        새줄.append({'거래처': n, **값})
+                새판값[칸] = {'rows': 새줄, '메모': 글 or ''}
+            if st.button('💾 저장', key=f'po_save_{키}', type='primary'):
+                try:
+                    최신, 최신sha, _, 문제2 = _PO읽기(한국, 새로=True)
+                    if 최신 is None:
+                        raise RuntimeError(문제2)
+                    if 최신['판'].get(판키, {}).get('잠금'):
+                        st.error('그 사이 부장님이 이 보고를 잠갔습니다 — 저장하지 않았습니다.')
+                    else:
+                        옛 = 최신['판'].get(판키, {})
+                        최신['판'][판키] = {**새판값, '잠금': False,
+                                           '기록': 옛.get('기록', []) + [{'시각': _PO지금(), '작성자': (작성자 or '').strip()}]}
+                        _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} {판키} 저장')
+                        st.success('저장했습니다.')
+                        st.rerun()
+                except Exception as e:
+                    st.error(f'저장하지 못했습니다 — {e}')
 
     # ── 보이는 표 (실적현황 표와 같은 모양)
     _머리 = '#3A3A3A' if 밝게 else '#2A2F3A'
@@ -7076,16 +7239,17 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                        font-size:13.5px; line-height:1.6; color:{T['ink']}; white-space:pre-wrap; min-height:120px; flex:1 1 auto;
                        box-sizing:border-box; }}
     </style>"""
-    with 보이는곳:
-        for 해, 실적달, 예상달 in 해들:
-            이전줄 = {r.get('거래처', ''): r for r in 저장.get(str(해), {}).get('rows', [])}
-            줄이름 = list(기본줄) + [n for n in 이전줄 if n and n not in 기본줄]
+
+    def _그리기(판p, 해들p, 기본p, 실p, 빈글):
+        for 해, 실적달, 예상달 in 해들p:
+            이전줄 = {r.get('거래처', ''): r for r in 판p.get(str(해), {}).get('rows', [])}
+            줄이름 = list(기본p) + [n for n in 이전줄 if n and n not in 기본p]
             예 = lambda n, m: float(이전줄.get(n, {}).get(str(m)) or 0.0)
             칸들 = [(m, False) for m in 실적달] + [(m, True) for m in 예상달]
             합칸 = {k: 0.0 for k in range(len(칸들))}
             몸 = ''
             for n in 줄이름:
-                vs = [(float(실.get((n, m), 0.0)) if not f else 예(n, m)) for m, f in 칸들]
+                vs = [(float(실p.get((n, m), 0.0)) if not f else 예(n, m)) for m, f in 칸들]
                 for i, v in enumerate(vs):
                     합칸[i] += v
                 몸 += (f'<tr><td class="it">{_html.escape(str(n))}</td>'
@@ -7111,11 +7275,96 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                         + f'<col style="width:{85 / n칸:.3f}%">' * n칸 + '</colgroup>'
                         f'<thead><tr>{머리1}</tr><tr>{머리2}</tr></thead><tbody>{몸}</tbody></table></div></div></div>')
             with 오른:
-                글 = 저장.get(str(해), {}).get('메모', '')
+                글 = 판p.get(str(해), {}).get('메모', '')
                 st.html(f'{CARD_CSS}<div class="wrap fillcol" translate="no">{css}<div class="card" style="margin-bottom:10px;display:flex;flex-direction:column">'
                         f'<h3>{해}년 세부사항</h3><div class="ponote">'
-                        + (_html.escape(글) if 글 else f'<span class="muted">아래 「예상 · 세부사항 고치기」 에서 적으면 여기에 보입니다</span>')
+                        + (_html.escape(글) if 글 else f'<span class="muted">{빈글}</span>')
                         + '</div></div></div>')
+
+    with 보이는곳:
+        _그리기(판, 해들, 기본줄, 실, '아래 「예상 · 세부사항 고치기」 에서 적으면 여기에 보입니다')
+
+    # ── 부장님 전용 : 잠그기 · 풀기 · 요약
+    with _바깥:
+        _관리 = st.toggle('🔑 부장님 전용 (잠그기 · 풀기 · 요약 적기)', key=f'po_admin_tg_{키}')
+        if _관리:
+            if not 관리비번:
+                st.caption('Secrets 에 admin_password 가 없어 잠금 기능을 쓸 수 없습니다 — PC .streamlit/secrets.toml 과 웹 Secrets 에 한 줄 넣어 주세요.')
+            elif not 관리자:
+                넣음 = st.text_input('관리 비밀번호', type='password', key=f'po_admin_pw_{키}')
+                if 넣음:
+                    import hmac as _hmac
+                    if _hmac.compare_digest(넣음.encode('utf-8'), 관리비번.encode('utf-8')):
+                        st.session_state['_po_admin_ok'] = 관리비번
+                        st.rerun()
+                    else:
+                        st.error('관리 비밀번호가 다릅니다.')
+            else:
+                c1, c2, _ = st.columns([1, 1, 4])
+                if not 잠김 and c1.button(f'🔒 {결산월}월 보고 잠그기', key=f'po_lock_{키}'):
+                    try:
+                        최신, 최신sha, _, 문제2 = _PO읽기(한국, 새로=True)
+                        if 최신 is None:
+                            raise RuntimeError(문제2)
+                        p = 최신['판'].get(판키) or {k: v for k, v in 판.items() if k not in ('잠금',)}
+                        p.update({'잠금': True, '잠근시각': _PO지금()})
+                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '부장님', '무엇': '잠금'})
+                        최신['판'][판키] = p
+                        _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} {판키} 잠금')
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f'잠그지 못했습니다 — {e}')
+                if 잠김 and c1.button(f'🔓 {결산월}월 보고 풀기', key=f'po_unlock_{키}'):
+                    try:
+                        최신, 최신sha, _, 문제2 = _PO읽기(한국, 새로=True)
+                        if 최신 is None:
+                            raise RuntimeError(문제2)
+                        p = 최신['판'].get(판키, {})
+                        p.update({'잠금': False, '잠근시각': ''})
+                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '부장님', '무엇': '풀기'})
+                        최신['판'][판키] = p
+                        _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} {판키} 풀기')
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f'풀지 못했습니다 — {e}')
+                if c2.button('관리 끝내기', key=f'po_admin_out_{키}'):
+                    st.session_state.pop('_po_admin_ok', None)
+                    st.rerun()
+                요약 = st.text_area('요약 (부장님 정리)', value=저장.get('요약', {}).get('글', ''), key=f'po_sum_{키}', height=140,
+                                   placeholder='지난 보고들을 훑어보고 정리할 내용을 적어 주세요')
+                if st.button('💾 요약 저장', key=f'po_sum_save_{키}'):
+                    try:
+                        최신, 최신sha, _, 문제2 = _PO읽기(한국, 새로=True)
+                        if 최신 is None:
+                            raise RuntimeError(문제2)
+                        최신['요약'] = {'글': 요약 or '', '고친시각': _PO지금()}
+                        _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} 요약')
+                        st.success('요약을 저장했습니다.')
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f'저장하지 못했습니다 — {e}')
+
+    # ── 지난 보고 기록 + 요약
+    지난 = sorted([k for k in 판들 if k != 판키 and k != '옛자료'], reverse=True)
+    요약글 = 저장.get('요약', {}).get('글', '')
+    if 지난 or 요약글:
+        with _바깥:
+            _지 = st.toggle(f'📚 지난 보고 기록 · 요약 ({len(지난)}건)', key=f'po_hist_{키}')
+            if _지:
+                if 요약글:
+                    st.html(f'{CARD_CSS}<div class="wrap" translate="no">{css}<div class="card" style="margin-bottom:10px">'
+                            f'<h3>요약 <span class="unitbadge">{저장["요약"].get("고친시각", "")}</span></h3>'
+                            f'<div class="ponote" style="min-height:0">{_html.escape(요약글)}</div></div></div>')
+                if 지난:
+                    _이름 = lambda k: f'{k[:4]}년 {int(k[5:])}월 보고' + (' 🔒' if 판들[k].get('잠금') else ' (잠기지 않음)')
+                    고름 = st.selectbox('볼 보고', 지난, format_func=_이름, key=f'po_hist_sel_{키}')
+                    p = 판들[고름]
+                    기본p, 실p, 해들p = _틀(int(고름[:4]), int(고름[5:]))
+                    _쓴 = [f'{r.get("시각", "")} {r.get("작성자", "") or "이름 없음"}{" · " + r["무엇"] if r.get("무엇") else ""}'
+                           for r in p.get('기록', [])]
+                    if _쓴:
+                        st.caption('기록 : ' + ' / '.join(_쓴[-6:]))
+                    _그리기(p, 해들p, 기본p, 실p, '적은 내용이 없습니다')
 
 
 def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
@@ -11837,9 +12086,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 'div[data-testid="stElementContainer"]:has(.fillcol) > div[data-testid="stHtml"],'
                 ' .wrap.fillcol, .wrap.fillcol > .card { height:100%; box-sizing:border-box; }'
                 '</style>' + 손익세부html.replace('<div class="wrap" translate="no">', '<div class="wrap fillcol" translate="no">', 1))
-    # 화면 전체 너비 (2026-11-20) : 계약 대비 점검 → 조직운영안 · 기타주요사항
-    if 계약html:
-        st.html(계약html)
+    # 화면 전체 너비 (2026-11-20) : 예상 PO → 조직운영안 · 기타주요사항 → 계약 대비 점검(잘 안 봄 · 맨 아래)
     if 당해보기:
         try:
             예상PO칸(당해원장, 당해연도, 보고월, 한국=(법인 == '씨티케이커넥트'))
@@ -11847,6 +12094,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             st.caption(f'예상 PO 칸을 그리지 못했습니다 — {e}')
     if 효율화html:
         st.html(효율화html)
+    if 계약html:
+        st.html(계약html)
 
     # ── 현금흐름 (왼쪽 3) + 항목별 거래처 세부내역 (오른쪽 1) ────────────
     if 자금표 is not None:
