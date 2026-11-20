@@ -6588,14 +6588,13 @@ def 패키지파일이름(연도, 월, 버전):
 
 def 패키지목록():
     """자료실에 쌓인 연결패키지 엑셀을 새 것부터 돌려줍니다."""
-    try:
-        이름들 = [n for n in os.listdir(자료실) if n.lower().endswith('.xlsx')
-                  and not n.startswith('~$') and 패키지패턴.search(n)]
-    except OSError:
-        return []
+    # 자료실 달 폴더까지 찾고, 씨티케이커넥트(한국) 패키지는 뺍니다 (2026-11-20)
+    경로들 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+              if not os.path.basename(f).startswith('~$') and 패키지패턴.search(os.path.basename(f))
+              and '씨티케이커넥트' not in os.path.basename(f)]
     목록 = []
-    for n in 이름들:
-        경로 = os.path.join(자료실, n)
+    for 경로 in 경로들:
+        n = os.path.basename(경로)
         try:
             st_ = os.stat(경로)
         except OSError:
@@ -6626,6 +6625,22 @@ os.makedirs('_작업중', exist_ok=True)
 패키지보관 = '_작업중/최근패키지.xlsx'        # 마지막으로 만든 연결패키지 재무제표
 
 
+def _미국원장():
+    """미국 CTKonnect 퀵북 원장 → (바이트, 이름). 올려 둔 원장이 한국 분개장이면 자료실의 가장 새 General Ledger."""
+    _있, _이름, _k, _t = 보관자료(원장보관)
+    if _있:
+        _b = 보관바이트(원장보관)
+        if _b and not 한국분개장인지(_b):
+            return _b, _이름
+    후보 = [f for f in glob.glob(os.path.join(자료실, '**', '*.xlsx'), recursive=True)
+            if 'general ledger' in os.path.basename(f).lower() and not os.path.basename(f).startswith('~$')]
+    if 후보:
+        _p = max(후보, key=os.path.getmtime)
+        with open(_p, 'rb') as _f:
+            return _f.read(), os.path.basename(_p)
+    return None, ''
+
+
 def 연결패키지양식칸():
     """재무제표 화면 가운데 — 연결패키지 양식만 올립니다 (원장은 올려 둔 것을 씁니다)."""
     st.markdown('**연결패키지 양식** (지난번 본사 패키지)')
@@ -6634,7 +6649,8 @@ def 연결패키지양식칸():
                             help='BS-당기 · IS-당기 시트가 든 본사 원본 패키지를 올려 주세요')
     자료남기기(양식보관, 올림)
     양식있음, 양식이름, _크기, _때 = 보관자료(양식보관)
-    원장있음, 원장이름, _크기2, _때2 = 보관자료(원장보관)
+    _원바, 원장이름 = _미국원장()
+    원장있음 = _원바 is not None
     if 양식있음 and 올림 is None:
         st.caption(f'양식 : 지난번에 올린 **{양식이름}** 을 그대로 씁니다.')
         바이트 = 보관바이트(양식보관)
@@ -6644,27 +6660,25 @@ def 연결패키지양식칸():
                                mime=('application/vnd.openxmlformats-officedocument'
                                      '.spreadsheetml.sheet'))
     if 원장있음:
-        st.caption(f'원장 : 「실적보고 엑셀작성」 의 **{원장이름}** 을 그대로 씁니다.')
+        st.caption(f'미국 원장 : **{원장이름}** 을 그대로 씁니다.')
     else:
-        st.caption('⚠ 원장이 아직 없습니다 — 「실적보고 엑셀작성」 에서 ① 원장 원본을 '
-                   '한 번 올려 주세요.')
+        st.caption('미국 퀵북 원장이 아직 없습니다 — 「실적보고 엑셀작성」 ① 에 올려 주세요.')
+    st.caption('한국 씨티케이커넥트는 「실적보고 엑셀작성」 ① 에 더존 분개장을 올려 만듭니다.')
 
 
 def 연결패키지칸():
     """재무제표 화면 오른쪽 — 연결패키지 엑셀 내려받기 · 만들기."""
     보관 = 패키지목록()
     최신 = 보관[0] if 보관 else None
-    st.caption('연결패키지 재무제표')
+    st.markdown('**미국 CTKonnect**')
     if 최신 is not None:
         try:
             with open(최신['경로'], 'rb') as f:
                 st.download_button(
-                    f"⤓  {최신['월'] or ''}월말 v{최신['버전']} 내려받기", data=f.read(),
+                    f"⤓ {최신['월'] or ''}월말 v{최신['버전']} 내려받기", data=f.read(),
                     file_name=최신['이름'], width='stretch', type='primary',
                     mime=('application/vnd.openxmlformats-officedocument'
-                          '.spreadsheetml.sheet'),
-                    help='BS(영문) · IS(영문) · BS · IS · CE · MC · CF · '
-                         'CF정산서 · 결산조정분개 아홉 장')
+                          '.spreadsheetml.sheet'))
         except OSError:
             st.button('⤓  내려받기', width='stretch', disabled=True)
     elif 보관자료(패키지보관)[0]:
@@ -6685,20 +6699,22 @@ def 연결패키지칸():
         st.button('⤓  내려받기', width='stretch', disabled=True,
                   help='아직 만든 패키지가 없습니다. 가운데에 양식을 올리고 만들어 주세요')
 
-    원장있음 = 보관자료(원장보관)[0]
+    _원바, _원이름 = _미국원장()
+    원장있음 = _원바 is not None
     양식있음 = 보관자료(양식보관)[0]
     준비 = 원장있음 and 양식있음
 
     def _누름():
         st.session_state['패키지생성요청'] = True
 
-    st.button('⚙  연결패키지 재무제표 만들기', width='stretch', disabled=not 준비,
-              on_click=_누름, key='pkg_make', type='primary' if 준비 else 'secondary',
-              help=('가운데에 연결패키지 양식을 올리면 켜집니다' if 원장있음
-                    else '「실적보고 엑셀작성」 에서 원장을 먼저 올려 주세요'))
+    st.button('⚙ 미국 연결패키지 만들기', width='stretch', disabled=not 준비,
+              on_click=_누름, key='pkg_make', type='primary' if 준비 else 'secondary')
+    if not 준비:
+        st.caption('가운데에 연결패키지 양식을 올리면 켜집니다' if 원장있음
+                   else '미국 퀵북 원장을 먼저 올려 주세요')
     if st.session_state.pop('패키지생성요청', False) and 준비:
         try:
-            바이트, 안내 = 연결패키지캐시(보관바이트(원장보관), 보관바이트(양식보관))
+            바이트, 안내 = 연결패키지캐시(_원바, 보관바이트(양식보관))
             월 = 안내['보고월']
             버전 = 패키지다음버전(월)
             이름 = 패키지파일이름(당해연도, 월, 버전)
@@ -6729,6 +6745,23 @@ def 연결패키지칸():
                    f"IS {안내['IS계정수']}개" + (f' · 저장 {저장}' if 저장 else ''))
         for 말 in 안내.get('확인', [])[:8]:
             st.caption(f'※ {말}')
+
+    # ── 한국 씨티케이커넥트 — 자료실의 가장 새 패키지 (2026-11-20)
+    st.write('')
+    st.markdown('**한국 씨티케이커넥트**')
+    try:
+        _kb, _kn = _KR패키지바이트(분개장보기=False)
+    except Exception:
+        _kb, _kn = None, ''
+    _km = re.search(r'(\d{1,2})월말_(v\d+)', str(_kn))
+    if _kb:
+        st.download_button(f"⤓ {_km.group(1) + '월말 ' + _km.group(2) if _km else '최종본'} 내려받기",
+                           data=_kb, file_name=_kn or '씨티케이커넥트_연결패키지.xlsx',
+                           width='stretch', type='primary', key='pkg_kr_dl',
+                           mime=('application/vnd.openxmlformats-officedocument'
+                                 '.spreadsheetml.sheet'))
+    else:
+        st.button('⤓  아직 없음', width='stretch', disabled=True, key='pkg_kr_dl_x')
 
 
 def 음수표기(글자):
@@ -9049,6 +9082,19 @@ if 메뉴 == '씨티케이커넥트':         # 2026-11-03 : 한국 법인 — �
     데이터바이트, 쓰는파일 = _kb, _kn
     설정칸.caption(f'📁 씨티케이커넥트 자료: {_kn}')
 
+# 미수채권 관리 : 법인을 골라 봅니다 — 한국을 고르면 씨티케이커넥트 연결패키지(KRW)로 같은 화면을 그립니다 (2026-11-20)
+if 메뉴 == '미수채권 관리':
+    _법 = st.radio('법인', ['미국 CTKonnect (USD)', '한국 씨티케이커넥트 (KRW)'], horizontal=True,
+                   key='ar_entity', label_visibility='collapsed')
+    if _법.startswith('한국'):
+        _kb, _kn = _KR패키지바이트(분개장보기=False)
+        if _kb:
+            법인 = '씨티케이커넥트'
+            데이터바이트, 쓰는파일 = _kb, _kn
+        else:
+            st.info('씨티케이커넥트 연결패키지가 아직 없습니다 — 「실적보고 → 씨티케이커넥트」 에서 올려 주세요.')
+            st.stop()
+
 # ══════════════════════════════════════════════════════════════
 # 실적보고 → 연결 손익계산서 (2026-11-02)
 #   ① CTKonnect(미국 · USD) → ② 씨티케이커넥트(한국 · KRW) → ③ 연결 (단순합산 · 내부거래 제거 · 연결)
@@ -9759,6 +9805,136 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="page-head"><span class="t">실적보고 — {법인}</span>
         <span class="pill">{당해연도}년 1~{보고월}월 누적{' · 단위 천원' if 통화 == 'KRW' else ''}</span></div>
     </div>""")
+
+    # ── 월간 실적보고 양식의 「실적현황」 표 : 전월대비 · 전년 동월대비 · 누적 (손익계산서 기준, 2026-11-20)
+    def _실적현황표():
+        Q, Q전 = P손익, P손익전
+        수 = Q.attrs.get('수준', {})
+        월 = 보고월
+        전월 = 월 - 1 if 월 > 1 else None
+        _누 = lambda t, n: float(sum(float(t.loc[n, m]) for m in range(1, 월 + 1))) if n in t.index else 0.0
+        _월 = lambda t, n, m: float(t.loc[n, m]) if (m and n in t.index and m in t.columns) else 0.0
+        판 = '판관비 (SR&ED 반영)' if '판관비 (SR&ED 반영)' in Q.index else '판매관리비'
+
+        def _아래(부모):           # 부모 줄 바로 아래 하위(수준 1) 줄들 — 금액이 있는 것만
+            줄, 안 = [], False
+            for n in Q.index:
+                if n == 부모:
+                    안 = True
+                    continue
+                if 안 and 수.get(n, 0) == 0:
+                    break
+                if 안 and Q.loc[n, list(range(1, 월 + 1))].abs().sum() > 0.5:
+                    줄.append(n)
+            return 줄
+
+        # 값 꺼내기 : 칸 → (당월, 전월, 전년동월, 당해누적, 전년누적)
+        def 값(n):
+            return (_월(Q, n, 월), _월(Q, n, 전월), _월(Q전, n, 월), _누(Q, n), _누(Q전, n))
+
+        def 비율(분자, 분모):
+            a, b = 값(분자), 값(분모)
+            return tuple((x / y * 100) if abs(y) > 0.5 else None for x, y in zip(a, b))
+
+        def 공헌율():
+            a, b = 값('매출액'), 값('매출원가')
+            return tuple(((x - y) / x * 100) if abs(x) > 0.5 else None for x, y in zip(a, b))
+
+        def BEP():
+            f, c = 값(판), 공헌율()
+            return tuple((x / (y / 100)) if (y is not None and y > 0) else None for x, y in zip(f, c))
+
+        _ebitda = 'EBITDA 이익(손실)' if 'EBITDA 이익(손실)' in Q.index else '영업이익(손실)'
+        # (묶음, 항목, 값들, 종류, 굵게, 증감율)
+        줄들 = [('매출액', '', 값('매출액'), 'amt', True, True)]
+        줄들 += [('', n, 값(n), 'amt', False, True) for n in _아래('매출액')]
+        줄들 += [('매출원가', '', 값('매출원가'), 'amt', True, False),
+                 ('', '원가율(%)', 비율('매출원가', '매출액'), 'pct', False, True),
+                 ('매출총이익', '', 값('매출총이익'), 'amt', True, False),
+                 ('판매관리비', '', 값(판), 'amt', True, True)]
+        줄들 += [('', n, 값(n), 'amt', False, True) for n in _아래('판매관리비')]
+        줄들 += [('영업이익', '', 값('영업이익(손실)'), 'amt', True, False),
+                 ('비율분석', '변동비율(**)', 비율('매출원가', '매출액'), 'pct', False, True),
+                 ('', '공헌이익율', 공헌율(), 'pct', False, True),
+                 ('', '영업이익율', 비율('영업이익(손실)', '매출액'), 'pct', False, True),
+                 ('', 'BEP(손익분기점)', BEP(), 'amt', False, False),
+                 ('', 'EBITDA', 값(_ebitda), 'amt', False, False)]
+
+        def 숫(v, 종류):
+            if v is None:
+                return ''
+            if 종류 == 'pct':
+                return 음수표기(f'{v:,.1f}%') if abs(v) >= 0.05 else '-'
+            return 금액(v)
+
+        def 증(a, b, 종류, 율):
+            # (증감액 칸, 증감율 칸) — 비율 줄은 증감율 칸에 %p
+            if 종류 == 'pct':
+                if a is None or b is None:
+                    return '', ''
+                d = a - b
+                return '', (음수표기(f'{d:,.1f}%p') if abs(d) >= 0.05 else '-')
+            if a is None or b is None:
+                return '', ''
+            d = a - b
+            r = ''
+            if 율:
+                r = (음수표기(f'{d / abs(b) * 100:,.1f}%') if abs(b) > 0.5 else '-')
+            return 금액(d), r
+
+        세트 = [('전월대비', [f'{str(당해연도)[2:]}년 {월}월', f'{str(당해연도)[2:]}년 {전월}월' if 전월 else '전월', '증감액', '증감율'])]
+        if not 전년없음:
+            세트.append(('전년 동월대비', [f'{str(전년연도)[2:]}년 {월}월', '증감액', '증감율']))
+            세트.append((f'{당해연도}년 {월}월 (누적)', [str(당해연도), str(전년연도), '증감액', '증감율']))
+        else:
+            세트.append((f'{당해연도}년 {월}월 (누적)', [f'{당해연도}년 1~{월}월']))
+        머리1 = (f'<th rowspan="2" colspan="2" class="rg">구 분</th>'
+                 + ''.join(f'<th colspan="{len(c)}" class="gs">{_html.escape(g)}</th>' for g, c in 세트))
+        머리2 = ''.join(''.join(f'<th class="{"gs" if i == 0 else ""}">{_html.escape(x)}</th>' for i, x in enumerate(c)) for g, c in 세트)
+        몸 = ''
+        for 묶, 항, v, 종, 굵, 율 in 줄들:
+            당, 전, 전년월, 누, 전누 = v
+            e1, r1 = 증(당, 전 if 전월 else None, 종, 율)
+            칸 = [숫(당, 종), 숫(전, 종) if 전월 else '', e1, r1]
+            if not 전년없음:
+                e2, r2 = 증(당, 전년월, 종, 율)
+                e3, r3 = 증(누, 전누, 종, 율)
+                칸 += [숫(전년월, 종), e2, r2, 숫(누, 종), 숫(전누, 종), e3, r3]
+            else:
+                칸 += [숫(누, 종)]
+            시작 = [0, 4] + ([7] if not 전년없음 else [])
+            td = ''.join(f'<td class="{"gs" if i in 시작 else ""}">{x}</td>' for i, x in enumerate(칸))
+            cls = ('grp' if 묶 else '') + (' b' if 굵 else '')
+            몸 += (f'<tr class="{cls.strip()}"><td class="g">{_html.escape(묶)}</td>'
+                   f'<td class="it">{_html.escape(항)}</td>{td}</tr>')
+        n칸 = sum(len(c) for _, c in 세트)
+        return f"""{CARD_CSS}<div class="wrap" translate="no">
+      <div class="card" style="margin-bottom:14px"><h3>{당해연도}년 {월}월 실적현황 <span class="unitbadge">단위 {'천원' if 통화 == 'KRW' else 'USD'}, %</span></h3>
+        <style>
+          .wrap table.rpt {{ border-collapse:collapse; table-layout:fixed; margin-top:8px; width:auto !important; }}
+          .wrap table.rpt th {{ font-size:13px; padding:5px 4px !important; text-align:center; border-bottom:1px solid {T['navyline']}; }}
+          .wrap table.rpt td {{ font-size:13px; padding:4px 6px !important; text-align:right; white-space:nowrap;
+                                border-bottom:1px solid {T['line']}; color:{T['ink']}; }}
+          .wrap table.rpt td.g {{ text-align:left; font-weight:800; background:{T['navysoft']}; }}
+          .wrap table.rpt td.it {{ text-align:left; background:{T['navysoft']}; color:{T['ink2']}; padding-left:8px !important; }}
+          .wrap table.rpt tr.b td {{ font-weight:800; }}
+          .wrap table.rpt tr.grp td {{ border-top:1px solid {T['strongline']}; }}
+          .wrap table.rpt .gs {{ border-left:1px solid {T['navyline']}; }}
+          .wrap table.rpt td.gs {{ border-left:1px solid {T['line']}; }}
+        </style>
+        <div class="scrollx"><table class="rpt">
+          <colgroup><col style="width:92px"><col style="width:150px">{'<col style="width:96px">' * n칸}</colgroup>
+          <thead><tr>{머리1}</tr><tr>{머리2}</tr></thead>
+          <tbody>{몸}</tbody></table></div>
+        <div class="sub" style="margin-top:6px;font-size:12px">(**) 변동비 = 매출원가 (그 외 판매관리비는 고정비로 분류) ·
+          공헌이익율 = (매출액 − 매출원가) ÷ 매출액 · BEP = 판매관리비 ÷ 공헌이익율 · EBITDA = 영업이익 + 감가상각비 · 무형자산상각비
+          · 손익계산서 계정 기준{' · 전년 자료가 없어 전년 칸은 뺐습니다' if 전년없음 else ''}</div>
+      </div></div>"""
+
+    try:
+        st.html(_실적현황표())
+    except Exception as e:
+        st.caption(f'실적현황 표를 그리지 못했습니다 — {e}')
 
     이전월 = 보고월 - 1 if 보고월 > 1 else None
     # ★KPI 카드는 1~보고월 누적★ (아래 표·그래프와 같은 기준)
@@ -11566,10 +11742,15 @@ elif 메뉴 == '월간실적':
 # 4. 미수채권 관리
 # ══════════════════════════════════════════════════════════════
 elif 메뉴 == '미수채권 관리':
-    st.write(f'### 미수채권 관리 — {기준일.date()} 기준')
-    st.caption('단위 USD · 만기 = 청구한 달의 다음 달 말일 · 거래처마다 오래된 청구부터 회수된 것으로 봅니다 (선입선출)')
+    _한국 = 법인 == '씨티케이커넥트'
+    _단위 = '천원' if _한국 else 'USD'
+    st.write(f"### 미수채권 관리 — {'한국 씨티케이커넥트' if _한국 else '미국 CTKonnect'} · {기준일.date()} 기준")
+    st.caption(f'단위 {_단위} · 만기 = 청구한 달의 다음 달 말일 · 거래처마다 오래된 청구부터 회수된 것으로 봅니다 (선입선출)')
 
     ar_all = 당해원장[당해원장['계정과목'].eq('매출채권')].copy()
+    _음 = ar_all['Debit'] < 0          # 더존 분개장의 차변 마이너스(취소 전표)는 대변으로 봅니다
+    ar_all.loc[_음, 'Credit'] = ar_all.loc[_음, 'Credit'] - ar_all.loc[_음, 'Debit']
+    ar_all.loc[_음, 'Debit'] = 0.0
     if ar_all.empty:
         st.warning('매출채권(Accounts Receivable) 계정을 찾지 못했습니다.')
         st.stop()
@@ -11580,9 +11761,13 @@ elif 메뉴 == '미수채권 관리':
                             _매출['계정영문'].astype(str).str.startswith('51104'),
                             _매출['계정과목'].astype(str).isin(['상품매출', '제품매출'])],
                            ['상품수수료매출 (중개)', 'IOR매출', '상품매출'], '기타 매출')
+    if _한국:                          # 한국 : 더존 계정과목 그대로 (제품매출 · 용역매출 · 상품매출)
+        _매출['구'] = _매출['계정과목'].astype(str)
     _매출['v'] = (_매출['Credit'] - _매출['Debit']).abs()
     구분맵 = (_매출.sort_values('v').groupby('TransactionID')['구'].last().to_dict())
     나이표, 초과회수 = 채권나이표(ar_all, 기초채권, 기준일, 구분맵)
+    if len(나이표):
+        나이표.loc[나이표['거래처명'].astype(str).str.startswith('기초채권'), '매출구분'] = '전기이월 (지난해 말 잔액)'
     나이표['매출구분'] = 나이표['매출구분'].replace('', '기타 (대납비용 청구 · 이자 등)')
     if 나이표.empty:
         st.success('현재 미수 잔액이 있는 거래처가 없습니다.')
@@ -11614,13 +11799,13 @@ elif 메뉴 == '미수채권 관리':
 
     kpi = f"""{CARD_CSS}<div class="wrap" translate="no"><div class="kpi-row" style="--n:3">
       <div class="kpi-card"><div class="kpi-label">{보고월}월 말 미수채권 합계</div>
-        <div class="kpi-value" style="font-size:24px;font-weight:700">{금액(총미수)} <span class="unit">USD</span></div></div>
+        <div class="kpi-value" style="font-size:24px;font-weight:700">{금액(총미수)} <span class="unit">{_단위}</span></div></div>
       <div class="kpi-card"><div class="kpi-label">기간 경과 (만기 지난 것)</div>
         <div class="kpi-value warn" style="font-size:24px;font-weight:700">{금액(연체)} <span class="unit">({연체/총미수*100:,.1f}%)</span></div>
         <div class="kpi-delta"><span class="muted">그중 91일 넘은 것 {금액(장기)}</span></div></div>
       <div class="kpi-card"><div class="kpi-label">만기 전</div>
         <div class="kpi-value ok" style="font-size:24px;font-weight:700">{금액(정상)} <span class="unit">({정상/총미수*100:,.1f}%)</span></div>
-        <div class="kpi-delta"><span class="muted">미수 거래처 {나이표['거래처명'].nunique()}곳</span></div></div>
+        <div class="kpi-delta"><span class="muted">미수 거래처 {나이표.loc[~나이표['거래처명'].astype(str).str.startswith('기초채권'), '거래처명'].nunique()}곳{' · 전기이월 별도' if (나이표['거래처명'].astype(str).str.startswith('기초채권')).any() else ''}</span></div></div>
     </div></div>"""
     st.html(kpi)
 
@@ -11634,7 +11819,8 @@ elif 메뉴 == '미수채권 관리':
     합계줄 = ''.join(f'<td>{금액(구간합[c])}</td>' for c in 표칸)
     줄들 = ''
     기초색 = f' style="color:{T["ink3"]}"'
-    _순서 = ['상품수수료매출 (중개)', 'IOR매출', '상품매출', '기타 매출', '기타 (대납비용 청구 · 이자 등)']
+    _순서 = ['상품수수료매출 (중개)', 'IOR매출', '제품매출', '상품매출', '용역매출', '기타 매출',
+             '기타 (대납비용 청구 · 이자 등)', '전기이월 (지난해 말 잔액)']
     for 구 in sorted(나이표['매출구분'].unique(), key=lambda g: _순서.index(g) if g in _순서 else 9):
         묶음 = 나이표[나이표['매출구분'] == 구].sort_values('채권총액', ascending=False)
         줄들 += (f'<tr class="total"><td class="lft">{_html.escape(구)}</td>'
@@ -11647,7 +11833,7 @@ elif 메뉴 == '미수채권 관리':
                      + _html.escape(str(행['거래처명'])) + '</td>' + 칸
                      + '<td><b>' + 금액(float(행['채권총액'])) + '</b></td><td></td></tr>')
     st.html(f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card"><h3>매출구분 · 거래처별 채권 연령표 <span class="unitbadge">단위 USD</span></h3>
+      <div class="card"><h3>매출구분 · 거래처별 채권 연령표 <span class="unitbadge">단위 {_단위}</span></h3>
         <style>
           .wrap table.agetab td, .wrap table.agetab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
           .wrap table.agetab thead th {{ padding-top:7px !important; padding-bottom:7px !important; }}
@@ -11683,7 +11869,7 @@ elif 메뉴 == '미수채권 관리':
         _거 = _미.groupby('거래처')['금액'].sum()
         _거글 = ' · '.join(f'{_html.escape(k)} <b>{금액(v)}</b>' for k, v in _거.items() if abs(v) > 0.5)
         st.html(f"""{CARD_CSS}<div class="wrap" translate="no">
-      <div class="card" style="margin-top:14px"><h3>미수수익 — 지연이자 등 아직 받지 않은 이자 <span class="unitbadge">단위 USD</span></h3>
+      <div class="card" style="margin-top:14px"><h3>미수수익 — 지연이자 등 아직 받지 않은 이자 <span class="unitbadge">단위 {_단위}</span></h3>
         <div class="sub">원장 미수수익 계정 · {보고월}월 말 잔액 <b>{금액(_잔)}</b> · 거래처별 : {_거글 or '-'} · 매출채권 연령표에는 들어가지 않습니다</div>
         <style>.wrap table.cmptab td, .wrap table.cmptab th {{ padding-top:4px !important; padding-bottom:4px !important; font-size:13px; }}
           .wrap table.cmptab thead th {{ padding-top:7px !important; padding-bottom:7px !important; }}</style>
@@ -11696,7 +11882,7 @@ elif 메뉴 == '미수채권 관리':
     # ── 상품매출 건별 Aging (상품 판매분만, 2026-10-29)
     #    상품매출(51101) 이 함께 잡힌 전표의 매출채권 차변 = 상품 청구 1건.
     #    회수는 그 거래처의 매출채권 대변을 오래된 청구부터 지움 (선입선출 · 위 연령표와 같은 방식)
-    _상품 = 상품채권html(당해원장, 기준일)
+    _상품 = None if _한국 else 상품채권html(당해원장, 기준일)
     if _상품:
         st.html(_상품.replace('<div class="card" style="margin-top:14px">',
                               '<details class="calcnote fold" style="margin-top:14px"><summary><b>상품매출 미수채권 건별 Aging</b> '
