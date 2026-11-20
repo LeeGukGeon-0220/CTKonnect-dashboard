@@ -10491,28 +10491,39 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         _백만 = 법인 == '씨티케이커넥트'
         CK = (lambda v, 괄호=True: '-' if v is None or pd.isna(v) else
               음수표기(f'{v / 1_000_000:,.0f}')) if _백만 else globals()['CK']
-        W, H, 위, 아래, 왼, 오른 = 1000, 200, 30, 36, 20, 20    # 위아래 폭 반 (2026-11-20)
+        W, H, 위, 아래, 왼, 오른 = 1000, 270, 40, 66, 92, 24    # 글자 크게 · 왼쪽 눈금 숫자 자리 · 아래 숫자와 월 글자 띄움 (2026-11-20)
         폭 = W - 왼 - 오른
         n = max(len(months), 1)
-        최대 = max([*매출25, *매출26, 1]) * 1.12
+        # 눈금 : 보기 좋은 간격(1 · 2 · 2.5 · 5 × 10ⁿ)으로 4칸
+        _나 = 1_000_000 if _백만 else 1
+        _최 = max([*매출25, *매출26, 1]) * 1.08 / _나
+        _거칠 = _최 / 4
+        _자 = 10 ** math.floor(math.log10(_거칠)) if _거칠 > 0 else 1
+        _간격 = next(m * _자 for m in (1, 2, 2.5, 5, 10) if m * _자 >= _거칠)
+        최대 = _간격 * 4 * _나
         x = lambda i: 왼 + 폭 * (i + 0.5) / n
         y = lambda v: 위 + (H - 위 - 아래) * (1 - max(v, 0) / 최대)
         g = ''
-        for k in range(1, 4):            # 옅은 가로선
+        for k in range(0, 5):            # 가로선 + 왼쪽 눈금 숫자 (맨 아래 = 바닥선)
             yy = 위 + (H - 위 - 아래) * k / 4
-            g += f'<line x1="{왼}" x2="{왼 + 폭}" y1="{yy:.1f}" y2="{yy:.1f}" stroke="#e5e7eb" stroke-width="1"/>'
+            바닥 = k == 4
+            g += (f'<line x1="{왼}" x2="{왼 + 폭}" y1="{yy:.1f}" y2="{yy:.1f}" '
+                  f'stroke="{"#9ca3af" if 바닥 else "#e5e7eb"}" stroke-width="{1.5 if 바닥 else 1}"/>')
+            _눈 = _간격 * (4 - k)
+            g += (f'<text x="{왼 - 10}" y="{yy + 6:.1f}" text-anchor="end" font-size="17" fill="#6b7280">'
+                  f'{_눈:,.0f}</text>')
         for 값들, 색, 당해 in (((매출26, T['accent'], True),) if 전년없음 else ((매출25, SLATE, False), (매출26, T['accent'], True))):
             pts = ' '.join(f'{x(i):.1f},{y(v):.1f}' for i, v in enumerate(값들))
-            g += f'<polyline points="{pts}" fill="none" stroke="{색}" stroke-width="3" stroke-linejoin="round"/>'
+            g += f'<polyline points="{pts}" fill="none" stroke="{색}" stroke-width="4" stroke-linejoin="round"/>'
             for i, v in enumerate(값들):
-                g += f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="4.5" fill="#fff" stroke="{색}" stroke-width="2.5"/>'
+                g += f'<circle cx="{x(i):.1f}" cy="{y(v):.1f}" r="6" fill="#fff" stroke="{색}" stroke-width="3"/>'
                 다른 = (매출25 if 당해 else 매출26)[i]
-                ty = y(v) - 11 if v >= 다른 else y(v) + 20
-                g += (f'<text x="{x(i):.1f}" y="{ty:.1f}" text-anchor="middle" font-size="15" '
+                ty = y(v) - 13 if v >= 다른 else y(v) + 26
+                g += (f'<text x="{x(i):.1f}" y="{ty:.1f}" text-anchor="middle" font-size="21" '
                       f'font-weight="700" fill="{"#111827" if 당해 else "#4b5563"}" stroke="#fff" stroke-width="5" '
                       f'stroke-linejoin="round" paint-order="stroke">{CK(v)}</text>')
         for i, m in enumerate(months):
-            g += f'<text x="{x(i):.1f}" y="{H - 12}" text-anchor="middle" font-size="14" fill="#6b7280">{m}월</text>'
+            g += f'<text x="{x(i):.1f}" y="{H - 12}" text-anchor="middle" font-size="19" fill="#4b5563">{m}월</text>'
         svg = (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" '
                f'font-family="Malgun Gothic, Pretendard, sans-serif">{g}</svg>')
         return (f'<img alt="월별 매출 추이" style="width:100%;height:auto;display:block;margin-top:6px" '
