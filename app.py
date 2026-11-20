@@ -7155,7 +7155,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
     # ── 고치기 : 잠긴 판은 못 켬
     with _바깥:
         _고침 = st.toggle('✏ 예상 · 세부사항 고치기 (켜면 입력 칸이 나옵니다 · 다 적고 「💾 저장」)', key=f'po_edit_{키}',
-                          disabled=잠김, help=('부장님이 잠근 보고는 고칠 수 없습니다' if 잠김 else None))
+                          disabled=잠김, help=('회계팀이 잠근 보고는 고칠 수 없습니다' if 잠김 else None))
         if _고침 and not 잠김:
             if 어디서 == '로컬' and os.name != 'nt':
                 st.caption('⚠ 공용 저장소 설정(github_token · github_repo)이 없어, 웹에서 저장한 내용은 이 웹 서버에만 잠시 남습니다.')
@@ -7202,7 +7202,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                     if 최신 is None:
                         raise RuntimeError(문제2)
                     if 최신['판'].get(판키, {}).get('잠금'):
-                        st.error('그 사이 부장님이 이 보고를 잠갔습니다 — 저장하지 않았습니다.')
+                        st.error('그 사이 회계팀이 이 보고를 잠갔습니다 — 저장하지 않았습니다.')
                     else:
                         옛 = 최신['판'].get(판키, {})
                         최신['판'][판키] = {**새판값, '잠금': False,
@@ -7286,7 +7286,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
 
     # ── 부장님 전용 : 잠그기 · 풀기 · 요약
     with _바깥:
-        _관리 = st.toggle('🔑 부장님 전용 (잠그기 · 풀기 · 요약 적기)', key=f'po_admin_tg_{키}')
+        _관리 = st.toggle('🔑 회계팀 체크 (잠그기 · 풀기 · 요약 적기)', key=f'po_admin_tg_{키}')
         if _관리:
             if not 관리비번:
                 st.caption('Secrets 에 admin_password 가 없어 잠금 기능을 쓸 수 없습니다 — PC .streamlit/secrets.toml 과 웹 Secrets 에 한 줄 넣어 주세요.')
@@ -7308,7 +7308,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                             raise RuntimeError(문제2)
                         p = 최신['판'].get(판키) or {k: v for k, v in 판.items() if k not in ('잠금',)}
                         p.update({'잠금': True, '잠근시각': _PO지금()})
-                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '부장님', '무엇': '잠금'})
+                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '회계팀', '무엇': '잠금'})
                         최신['판'][판키] = p
                         _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} {판키} 잠금')
                         st.rerun()
@@ -7321,7 +7321,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                             raise RuntimeError(문제2)
                         p = 최신['판'].get(판키, {})
                         p.update({'잠금': False, '잠근시각': ''})
-                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '부장님', '무엇': '풀기'})
+                        p.setdefault('기록', []).append({'시각': _PO지금(), '작성자': '회계팀', '무엇': '풀기'})
                         최신['판'][판키] = p
                         _PO쓰기(한국, 최신, 최신sha, f'예상PO {키} {판키} 풀기')
                         st.rerun()
@@ -7330,7 +7330,7 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                 if c2.button('관리 끝내기', key=f'po_admin_out_{키}'):
                     st.session_state.pop('_po_admin_ok', None)
                     st.rerun()
-                요약 = st.text_area('요약 (부장님 정리)', value=저장.get('요약', {}).get('글', ''), key=f'po_sum_{키}', height=140,
+                요약 = st.text_area('요약 (회계팀 정리)', value=저장.get('요약', {}).get('글', ''), key=f'po_sum_{키}', height=140,
                                    placeholder='지난 보고들을 훑어보고 정리할 내용을 적어 주세요')
                 if st.button('💾 요약 저장', key=f'po_sum_save_{키}'):
                     try:
@@ -7365,6 +7365,63 @@ def 예상PO칸(원장, 연도, 결산월, 상위N=5, 한국=False):
                     if _쓴:
                         st.caption('기록 : ' + ' / '.join(_쓴[-6:]))
                     _그리기(p, 해들p, 기본p, 실p, '적은 내용이 없습니다')
+
+
+def 주요사항칸(연도, 결산월, 한국=False, 엑셀html=''):
+    """주요사항 (2026-11-20) — 대시보드에서 바로 적는 칸. 예상 PO 와 같은 저장소 · 같은 잠금(그 달 보고를 잠그면 함께 잠김)
+    · 저장 모양 : 저장['주요']['2026-09'] = {'글': …, '기록': [...]}"""
+    키 = 'kr' if 한국 else 'us'
+    판키 = f'{연도}-{int(결산월):02d}'
+    저장, sha, 어디서, 문제 = _PO읽기(한국)
+    if 저장 is None:
+        st.warning('⚠ ' + 문제 + ' — 주요사항을 읽지 못했습니다. 잠시 뒤 새로고침해 주세요.')
+        return
+    잠김 = bool(저장['판'].get(판키, {}).get('잠금'))
+    주요 = 저장.get('주요', {})
+    지금 = 주요.get(판키, {})
+    글 = 지금.get('글', '')
+    기록 = 지금.get('기록', [])
+    지난 = sorted([k for k in 주요 if k < 판키 and 주요[k].get('글')], reverse=True)
+    지난html = ''.join(
+        f'<div style="margin-top:8px"><b>{k[:4]}년 {int(k[5:])}월</b>'
+        + (' 🔒' if 저장['판'].get(k, {}).get('잠금') else '')
+        + f'<div style="white-space:pre-wrap;margin:4px 0 0 4px">{_html.escape(주요[k]["글"])}</div></div>' for k in 지난)
+    머리 = ('🔒 잠김' if 잠김 else '') + (f' · 마지막 저장 {기록[-1].get("시각", "")} · {_html.escape(기록[-1].get("작성자", "") or "이름 없음")}'
+                                          if 기록 else '')
+    st.html(f'{CARD_CSS}<div class="wrap" translate="no"><details class="fold" open>'
+            f'<summary style="font-size:15px;font-weight:800;color:{T["ink"]};margin-bottom:6px">주요사항 '
+            f'<span class="muted" style="font-size:12.5px;font-weight:400">진행 중이거나 해야 할 일 · 아래 「✏ 주요사항 고치기」 에서 적습니다</span></summary>'
+            f'<div class="kpi-card"><div class="kpi-label">{연도}년 {결산월}월 <span class="muted" style="font-weight:400">{머리}</span></div>'
+            + (f'<div style="white-space:pre-wrap;font-size:13.5px;line-height:1.6;margin-top:6px;color:{T["ink"]}">{_html.escape(글)}</div>'
+               if 글 else '<div style="min-height:40px"></div>')
+            + (f'<div style="margin-top:10px">{엑셀html}</div>' if 엑셀html else '')
+            + (f'<details class="calcnote fold"><summary><b>지난 달 보기</b> <span class="muted">({len(지난)}개월 · 누르면 펼쳐집니다)</span></summary>'
+               f'{지난html}</details>' if 지난 else '')
+            + '</div></details></div>')
+    _고침 = st.toggle('✏ 주요사항 고치기 (켜면 입력 칸이 나옵니다 · 다 적고 「💾 저장」)', key=f'main_edit_{키}',
+                      disabled=잠김, help=('회계팀이 잠근 보고는 고칠 수 없습니다' if 잠김 else None))
+    if _고침 and not 잠김:
+        if 어디서 == '로컬' and os.name != 'nt':
+            st.caption('⚠ 공용 저장소 설정(github_token · github_repo)이 없어, 웹에서 저장한 내용은 이 웹 서버에만 잠시 남습니다.')
+        작성자 = st.text_input('작성자', key=f'main_who_{키}', placeholder='이름을 적어 주세요 (저장 기록에 남습니다)')
+        새글 = st.text_area(f'{결산월}월 주요사항', value=글, key=f'main_txt_{키}_{판키}', height=180,
+                            placeholder='진행 중이거나 해야 할 일을 적어 주세요 (한 줄에 하나씩)')
+        if st.button('💾 저장', key=f'main_save_{키}', type='primary'):
+            try:
+                최신, 최신sha, _, 문제2 = _PO읽기(한국, 새로=True)
+                if 최신 is None:
+                    raise RuntimeError(문제2)
+                if 최신['판'].get(판키, {}).get('잠금'):
+                    st.error('그 사이 회계팀이 이 보고를 잠갔습니다 — 저장하지 않았습니다.')
+                else:
+                    옛 = 최신.setdefault('주요', {}).get(판키, {})
+                    최신['주요'][판키] = {'글': 새글 or '',
+                                         '기록': 옛.get('기록', []) + [{'시각': _PO지금(), '작성자': (작성자 or '').strip()}]}
+                    _PO쓰기(한국, 최신, 최신sha, f'주요사항 {키} {판키} 저장')
+                    st.success('저장했습니다.')
+                    st.rerun()
+            except Exception as e:
+                st.error(f'저장하지 못했습니다 — {e}')
 
 
 def 세부패널(대상, 값컬럼, 부호=1, 상위N=7):
@@ -11808,19 +11865,15 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                     + '</li>')
         할일 = sorted([r for r in 행들 if r['상태'] != '완료'], key=lambda r: 순서.get(r['상태'], 3))
         끝난 = [r for r in 행들 if r['상태'] == '완료']
-        본문 = (f'<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.55;list-style:none">{"".join(줄(r) for r in 할일)}</ul>'
-                if 할일 else ('<div class="muted" style="min-height:40px;font-size:12.5px;margin-top:6px">올린 연결패키지에 '
-                             '「기타주요사항」 시트가 없습니다 (v17 양식부터 있음)</div>' if 시트없음
-                             else '<div style="min-height:40px"></div>'))
-        return (f'{CARD_CSS}<div class="wrap" translate="no"><details class="fold" open>'
-                f'<summary style="font-size:15px;font-weight:800;color:{T["ink"]};margin-bottom:6px">기타주요사항 '
-                f'<span class="muted" style="font-size:12.5px;font-weight:400">조직운영안 외에 진행 중이거나 해야 할 일</span></summary>'
-                f'<div class="kpi-card"><div class="kpi-label">진행 중 · 해야 할 일 {len(할일)}건</div>{본문}'
+        if not 할일 and not 끝난:
+            return ''
+        return (f'<div class="kpi-label">패키지 「기타주요사항」 시트 · 진행 중 · 해야 할 일 {len(할일)}건</div>'
+                + (f'<ul style="margin:6px 0 0;padding-left:18px;font-size:13px;line-height:1.55;list-style:none">{"".join(줄(r) for r in 할일)}</ul>' if 할일 else '')
                 + (f'<details class="calcnote fold"><summary><b>완료된 일</b> <span class="muted">({len(끝난)}건 · 누르면 펼쳐집니다)</span></summary>'
-                   f'<ul style="margin:4px 0 0;padding-left:18px;list-style:none">{"".join(줄(r) for r in 끝난)}</ul></details>' if 끝난 else '')
-                + '</div></details></div>')
+                   f'<ul style="margin:4px 0 0;padding-left:18px;list-style:none">{"".join(줄(r) for r in 끝난)}</ul></details>' if 끝난 else ''))
 
     효율화html = ''
+    기타목록html = None
     if 당해보기 and 법인 == 'CTKonnect':      # 조직운영안 · 기타주요사항은 CTKonnect 패키지에만 있음
         _과제행 = 과제기록적용('조직운영안', (BS밑자료 or {}).get('원가절감') or [], (당해연도, 보고월))
         _최근 = {}
@@ -11831,7 +11884,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                               (f'과제 {len(_최근)}건 · 기대 효과 합계 월 {_효과계:,.0f} USD · 업무이관 · 조직 · 인력 · 프로세스 · 시스템'
                                if _최근 else f'{보고월}월 칸에 과제를 적어 올리시면 여기에 보입니다 (업무이관 · 조직 · 인력 · 프로세스 · 시스템)'),
                               _과제행, '조직운영안')
-        효율화html += _기타섹션((BS밑자료 or {}).get('기타사항'))
+        기타목록html = _기타섹션((BS밑자료 or {}).get('기타사항'))
 
     손익html = f"""{CARD_CSS}<div class="wrap" translate="no">
       <div class="card"><h3>손익계산서 — {연도X}년 1~{보고월X}월 <span class="unitbadge">단위 {단위K}</span></h3>
@@ -11841,7 +11894,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                             '비용은 양수 · 판관비는 상위 4개 계정과 기타로 나눠 표시했습니다') + ' · 「판관비 합계」를 누르면 세부가 펼쳐집니다')} ·
           영업이익 아래 <b>영업외손익 · 세전이익</b>까지 보여줍니다{손익예상안내}</div>
         <input type="checkbox" class="togbox" id="pl-sga">
-        <style>.wrap table.pltab th, .wrap table.pltab td {{ font-size:14.5px !important; }}</style>
+        <style>.wrap table.pltab th, .wrap table.pltab td {{ font-size:14.5px !important; }}
+          .wrap table.pltab tbody tr:last-child td:last-child {{ border-bottom:1.5px solid {T['ink3']} !important; border-radius:0 !important; }}</style>
         <div class="scrollx"><table class="lined pltab" {표스타일}>{콜그룹}<thead><tr><th>구분</th>
         {''.join(f'<th>{m}월</th>' for m in monthsX)}
         <th style="background:{T['navy7']}">누적<br><span class="fcs" style="font-size:11px;font-weight:600;opacity:.85">1~{보고월X}월</span></th>
@@ -12086,12 +12140,17 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 'div[data-testid="stElementContainer"]:has(.fillcol) > div[data-testid="stHtml"],'
                 ' .wrap.fillcol, .wrap.fillcol > .card { height:100%; box-sizing:border-box; }'
                 '</style>' + 손익세부html.replace('<div class="wrap" translate="no">', '<div class="wrap fillcol" translate="no">', 1))
-    # 화면 전체 너비 (2026-11-20) : 예상 PO → 조직운영안 · 기타주요사항 → 계약 대비 점검(잘 안 봄 · 맨 아래)
+    # 화면 전체 너비 (2026-11-20) : 예상 PO → 주요사항(대시보드에서 적기) → 조직운영안 → 계약 대비 점검(잘 안 봄 · 맨 아래)
     if 당해보기:
         try:
             예상PO칸(당해원장, 당해연도, 보고월, 한국=(법인 == '씨티케이커넥트'))
         except Exception as e:
             st.caption(f'예상 PO 칸을 그리지 못했습니다 — {e}')
+    if 기타목록html is not None:
+        try:
+            주요사항칸(당해연도, 보고월, 한국=(법인 == '씨티케이커넥트'), 엑셀html=기타목록html)
+        except Exception as e:
+            st.caption(f'주요사항 칸을 그리지 못했습니다 — {e}')
     if 효율화html:
         st.html(효율화html)
     if 계약html:
