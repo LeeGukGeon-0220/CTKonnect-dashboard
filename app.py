@@ -9942,7 +9942,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                  ('판매관리비', '', 값(판), 'amt', True, True)]
         줄들 += [('', n, 값(n), 'amt', False, True) for n in _아래('판매관리비')]
         줄들 += [('영업이익', '', 값('영업이익(손실)'), 'amt', True, False),
-                 ('비율분석', '변동비율(**)', 비율('매출원가', '매출액'), 'pct', False, True),
+                 ('비율분석', '변동비율', 비율('매출원가', '매출액'), 'pct', False, True),
                  ('', '공헌이익율', 공헌율(), 'pct', False, True),
                  ('', '영업이익율', 비율('영업이익(손실)', '매출액'), 'pct', False, True),
                  ('', 'BEP(손익분기점)', BEP(), 'amt', False, False),
@@ -9996,6 +9996,48 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             몸 += (f'<tr class="{cls.strip()}"><td class="g">{_html.escape(묶)}</td>'
                    f'<td class="it">{_html.escape(항)}</td>{td}</tr>')
         n칸 = sum(len(c) for _, c in 세트)
+        # ── 지급수수료 상위 5곳 (당월 · 누적, 2026-11-20)
+        _수수료표 = ''
+        try:
+            _w = 당해원장[당해원장['계정과목'].astype(str).eq('지급수수료') & 당해원장['월'].le(월)].copy()
+            _w['v'] = _w['Debit'].fillna(0) - _w['Credit'].fillna(0)
+            def _거래처(r):         # 거래처가 비어 있으면 적요에서 찾음 (_CTK-이름_ · 마켓 · 결산분개)
+                n = r['Name']
+                if str(n) not in ('nan', 'None', ''):
+                    return re.sub(r'\s*\((IC\s+)?(Customer|Customers|Vendor)\)\s*$', '', str(n)).strip()
+                t = str(r.get('Description', '') or '')
+                m = re.search(r'_CTK-([^_]+)_', t)
+                if m:
+                    return m.group(1).strip().upper()
+                if re.search(r'amazon|아마존|tiktok|틱톡|shopify', t, re.I):
+                    return 'Amazon · TikTok 등 마켓'
+                if '결산' in t:
+                    return '결산분개 (미지급 인식 · 역분개)'
+                return '(거래처 미기재)'
+            _w['거'] = _w.apply(_거래처, axis=1)
+            _이름들 = [n for n in _w.loc[_w['Name'].notna(), '거'].unique()]
+            _w['거'] = _w['거'].map(lambda g: next((n for n in _이름들 if n != g and n.upper().startswith(g.upper() + ' ')), g))
+            _누 = _w.groupby('거')['v'].sum().sort_values(ascending=False)
+            _당 = _w[_w['월'].eq(월)].groupby('거')['v'].sum()
+            if len(_누):
+                _위5 = _누.iloc[:5]
+                _줄 = ''.join(f'<tr><td class="it" style="padding-left:10px !important">{_html.escape(str(n))}</td>'
+                              f'<td>{금액(float(_당.get(n, 0.0)))}</td><td>{금액(float(v))}</td>'
+                              f'<td>{float(v) / float(_누.sum()) * 100:,.1f}%</td></tr>' for n, v in _위5.items())
+                _나 = float(_누.iloc[5:].sum())
+                if abs(_나) > 0.5:
+                    _나당 = float(_당.drop([i for i in _위5.index if i in _당.index]).sum())
+                    _줄 += (f'<tr><td class="it" style="padding-left:10px !important">기타 ({len(_누) - 5}곳)</td>'
+                            f'<td>{금액(_나당)}</td><td>{금액(_나)}</td><td>{_나 / float(_누.sum()) * 100:,.1f}%</td></tr>')
+                _줄 += (f'<tr class="grp b"><td class="g">합계</td><td>{금액(float(_당.sum()))}</td>'
+                        f'<td>{금액(float(_누.sum()))}</td><td>100.0%</td></tr>')
+                _수수료표 = (f'<div style="margin-top:16px;font-weight:800;font-size:15px;color:{T["ink"]}">지급수수료 상위 5곳</div>'
+                            f'<div class="scrollx"><table class="rpt" style="margin-top:6px">'
+                            f'<colgroup><col style="width:40%"><col style="width:20%"><col style="width:22%"><col style="width:18%"></colgroup>'
+                            f'<thead><tr><th>거래처</th><th>{월}월</th><th>누적 (1~{월}월)</th><th>비중</th></tr></thead>'
+                            f'<tbody>{_줄}</tbody></table></div>')
+        except Exception:
+            _수수료표 = ''
         _머리 = '#3A3A3A' if 밝게 else '#2A2F3A'
         _회색 = '#E8E8E8' if 밝게 else 'rgba(255,255,255,0.07)'
         _진선 = '#222222' if 밝게 else T['ink3']
@@ -10025,9 +10067,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
           <colgroup><col style="width:11%"><col style="width:19%">{f'<col style="width:{70 / n칸:.3f}%">' * n칸}</colgroup>
           <thead><tr>{머리1}</tr><tr>{머리2}</tr></thead>
           <tbody>{몸}</tbody></table></div>
-        <div class="sub" style="margin-top:6px;font-size:12px;width:0;min-width:100%">(**) 변동비 = 매출원가 (그 외 판매관리비는 고정비로 분류) ·
-          공헌이익율 = (매출액 − 매출원가) ÷ 매출액 · BEP = 판매관리비 ÷ 공헌이익율 · EBITDA = 영업이익 + 감가상각비 · 무형자산상각비
-          · 손익계산서 계정 기준{' · 전년 자료가 없어 전년 칸은 뺐습니다' if 전년없음 else ''}</div>
+        {_수수료표}
       </div></div>"""
 
     try:
@@ -10161,7 +10201,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         _백만 = 법인 == '씨티케이커넥트'
         CK = (lambda v, 괄호=True: '-' if v is None or pd.isna(v) else
               음수표기(f'{v / 1_000_000:,.0f}')) if _백만 else globals()['CK']
-        W, H, 위, 아래, 왼, 오른 = 1000, 300, 34, 36, 20, 20    # 실적현황 표 옆 반쪽 칸에 맞춘 크기 (2026-11-20)
+        W, H, 위, 아래, 왼, 오른 = 1000, 200, 30, 36, 20, 20    # 위아래 폭 반 (2026-11-20)
         폭 = W - 왼 - 오른
         n = max(len(months), 1)
         최대 = max([*매출25, *매출26, 1]) * 1.12
@@ -10903,8 +10943,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="rptgrid" style="display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; align-items:stretch">
        <div class="rptl" style="min-width:0">{_실적표html}</div>
        <div class="rptr" style="display:flex; flex-direction:column; gap:14px; min-width:0">
-        <div class="card"><h3>월별 매출 추이 <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
-          <div class="sub">{f'1~{보고월}월' if 전년없음 else f'1~{보고월}월 · {전년연도}년 동월 비교'}</div>
+        <div class="card"><h3>월별 매출 추이 (1월~{보고월}월) <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
+          {'' if 전년없음 else f'<div class="sub">{전년연도}년 동월 비교</div>'}
           {bars_line}
           <div class="legend">{'' if 전년없음 else f'<span><span class="sw" style="background:{SLATE};"></span> {전년연도}년</span>'}
           <span><span class="sw" style="background:{T['accent']};"></span> {당해연도}년</span></div></div>
@@ -10913,7 +10953,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       </div>
       <style>@media (max-width:1100px) {{ .wrap .rptgrid {{ grid-template-columns:1fr !important; }} }}
         .wrap .rptl > .wrap, .wrap .rptl > .wrap > .card {{ height:100%; box-sizing:border-box; margin-bottom:0 !important; }}
-        .wrap .rptr > .card:first-child {{ flex:1 1 auto; }}</style>
+        .wrap .rptr .mix-item .top {{ font-size:17px; }} .wrap .rptr .mix-total {{ font-size:17.5px; }}
+        .wrap .rptr .mix-track {{ height:10px; }}</style>
     </div>"""
     st.html(상단html)
 
@@ -11227,7 +11268,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                             '비용은 양수 · 판관비는 상위 4개 계정과 기타로 나눠 표시했습니다') + ' · 「판관비 합계」를 누르면 세부가 펼쳐집니다')} ·
           영업이익 아래 <b>영업외손익 · 세전이익</b>까지 보여줍니다{손익예상안내}</div>
         <input type="checkbox" class="togbox" id="pl-sga">
-        <div class="scrollx"><table class="lined" {표스타일}>{콜그룹}<thead><tr><th>구분</th>
+        <style>.wrap table.pltab th, .wrap table.pltab td {{ font-size:14.5px !important; }}</style>
+        <div class="scrollx"><table class="lined pltab" {표스타일}>{콜그룹}<thead><tr><th>구분</th>
         {''.join(f'<th>{m}월</th>' for m in monthsX)}
         <th style="background:{T['navy7']}">누적<br><span class="fcs" style="font-size:11px;font-weight:600;opacity:.85">1~{보고월X}월</span></th>
         {''.join(f'<th class="fc">{m}월<br><span class="fcs">예상</span></th>' for m in 예상월들)}</tr></thead>
@@ -11440,7 +11482,9 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             계약html = f"""{CARD_CSS}<div class="wrap ctr" translate="no">
       <style>.wrap.ctr table.lined th, .wrap.ctr table.lined td {{ font-size:14.5px !important; }}
         .wrap.ctr .sub, .wrap.ctr .calcnote {{ font-size:14px; }}</style>
-      <div class="card"><h3>계약 대비 점검 — 아이월드 · 이공이공 <span class="unitbadge">단위 {단위K}</span></h3>
+      <details class="calcnote fold" style="margin-top:4px"><summary><b>계약 대비 점검 — 아이월드 · 이공이공</b>
+        <span class="muted">(누르면 펼쳐집니다 · 단위 {단위K})</span></summary>
+      <div class="card" style="margin-top:8px">
         <div class="sub">계약 = 브랜드사 매입금액(납품 원가) + Mark-Up 4% · DDP(미국 창고까지 운송 · 통관 · 관세는 공급자 부담) · 근거 = 작업자료 「팩토링 거래 계약서」 · 원장 매출 전표 기준</div>
         <div class="calcnote" style="margin:4px 0 12px">{_결론}</div>
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
@@ -11451,7 +11495,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
         <div class="scrollx"><table class="lined" style="width:100%; table-layout:fixed">
           <colgroup><col style="width:16%"><col style="width:13%"><col style="width:13%"><col style="width:11%"><col style="width:47%"></colgroup>
           <thead><tr><th class="lft">거래처</th><th>청구액</th><th>그중 대납 비용</th><th>수수료</th><th class="lft">계약과의 관계</th></tr></thead>
-          <tbody>{_ior행}</tbody></table></div></div></div>"""
+          <tbody>{_ior행}</tbody></table></div></div></details></div>"""
 
     손익칸, 손익세부칸 = st.columns([2, 1], gap='small')   # 작은 화면에서도 오른쪽 세부내역이 읽히도록
     with 손익칸:
