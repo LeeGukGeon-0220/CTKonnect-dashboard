@@ -10248,10 +10248,8 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
             return 금액(d), r
 
         세트 = [('전월대비', [f'{str(당해연도)[2:]}년 {월}월', f'{str(당해연도)[2:]}년 {전월}월' if 전월 else '전월', '증감액', '증감율'])]
-        if not 전년없음:      # 전년 동월대비는 표기하지 않음 (2026-11-20)
-            세트.append((f'누적 (1~{월}월)', [str(당해연도), str(전년연도), '증감액', '증감율']))
-        else:
-            세트.append(('누적', [f'{당해연도}년 1~{월}월']))
+        # 전년 동월대비는 표기하지 않음 · 전년 자료가 없으면 2025 칸은 빈칸 (2026-11-20)
+        세트.append((f'누적 (1~{월}월)', [str(당해연도), str(전년연도), '증감액', '증감율']))
         머리1 = (f'<th rowspan="2" colspan="2" class="rg">구 분</th>'
                  + ''.join(f'<th colspan="{len(c)}" class="gs">{_html.escape(g)}</th>' for g, c in 세트))
         머리2 = ''.join(''.join(f'<th class="{"gs" if i == 0 else ""}">{_html.escape(x)}</th>' for i, x in enumerate(c)) for g, c in 세트)
@@ -10264,7 +10262,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
                 e3, r3 = 증(누, 전누, 종, 율)
                 칸 += [숫(누, 종), 숫(전누, 종), e3, r3]
             else:
-                칸 += [숫(누, 종)]
+                칸 += [숫(누, 종), '', '', '']
             시작 = [0, 4]
             td = ''.join(f'<td class="{"gs" if i in 시작 else ""}">{x}</td>' for i, x in enumerate(칸))
             cls = ('grp' if 묶 else '') + (' b' if 굵 else '')
@@ -11215,7 +11213,7 @@ if 메뉴 in ('CTKonnect', '씨티케이커넥트'):
       <div class="note">모든 금액은 {'' if 통화 == 'KRW' else ('천 단위 ' if 표시나눔 == 1000 else '')}{단위K} 로 표시했습니다{' (천원 미만 반올림 · 월별 매출 추이 그래프만 백만원)' if 통화 == 'KRW' else ''} · 원장에서 직접 계산한 실제 수치입니다{환율문구}</div>
       {경고}
       {kpi}
-      <div class="rptgrid" style="display:grid; grid-template-columns:{'minmax(0,1fr) minmax(0,1fr)' if 전년없음 else 'minmax(0,3fr) minmax(0,2fr)'}; gap:14px; align-items:stretch">
+      <div class="rptgrid" style="display:grid; grid-template-columns:minmax(0,3fr) minmax(0,2fr); gap:14px; align-items:stretch">
        <div class="rptl" style="min-width:0">{_실적표html}</div>
        <div class="rptr" style="display:flex; flex-direction:column; gap:14px; min-width:0">
         <div class="card"><h3>월별 매출 추이 (1월~{보고월}월) <span class="unitbadge">단위 {'백만원' if 법인 == '씨티케이커넥트' else 단위K}</span></h3>
